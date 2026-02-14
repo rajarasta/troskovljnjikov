@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from .backend import parse_uploaded_file_sync
 from .mock_data import (
     generate_mock_matches,
     generate_mock_parsed_file,
@@ -46,6 +47,30 @@ if state["use_mock_data"] and state["parsed_file"] is None:
         state["price_stats"][state["selected_item_id"]] = generate_mock_price_stats()
     state["reasoning_log"] = generate_mock_reasoning_log()
     state["pipeline"] = generate_mock_pipeline()
+
+# --- Handle uploaded file (overrides mock data) ---
+uploaded = state.get("uploaded_file")
+if uploaded is not None and state.get("_last_uploaded") != uploaded.name:
+    content = uploaded.read()
+    state["parsed_file"] = parse_uploaded_file_sync(content, uploaded.name)
+    state["_last_uploaded"] = uploaded.name
+    state["selected_item_id"] = None
+    state["matches"] = {}
+    state["price_stats"] = {}
+    # Select first work item with priced lines, or first item with level >= 2
+    for item in state["parsed_file"].items:
+        if item.level >= 2 and item.priced_lines:
+            state["selected_item_id"] = item.id
+            break
+    # If no priced item found, select first non-chapter item
+    if state["selected_item_id"] is None:
+        for item in state["parsed_file"].items:
+            if item.level >= 1:
+                state["selected_item_id"] = item.id
+                break
+    # If still nothing, select the very first item
+    if state["selected_item_id"] is None and state["parsed_file"].items:
+        state["selected_item_id"] = state["parsed_file"].items[0].id
 
 # --- Inject theme CSS ---
 theme_vars = get_theme_css_vars(state["theme"])
