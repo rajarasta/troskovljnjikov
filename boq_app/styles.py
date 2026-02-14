@@ -656,4 +656,10 @@ def get_all_css(theme_vars: str) -> str:
 {_unit_panel_css()}
 {_header_css()}
 {_streamlit_overrides()}
+
+@supports not (backdrop-filter: blur(20px)) {{
+    [data-testid="stVerticalBlockBorderWrapper"] {{
+        background: rgba(255, 255, 255, 0.85) !important;
+    }}
+}}
 </style>"""
