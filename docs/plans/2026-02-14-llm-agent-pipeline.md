@@ -1,16 +1,16 @@
-# LLM Agent Pipeline Implementation Plan
+# LLM Agent Pipeline + Streamlit UI Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Replace deterministic price averaging with a 3-stage PydanticAI agent pipeline (Classifier → Comparator → Pricer) that uses tool calls against a local Ministral-3B.
+**Goal:** Replace deterministic price averaging with a 3-stage PydanticAI agent pipeline (Classifier → Comparator → Pricer) and build a futuristic Streamlit UI with glassmorphism theming and full LLM observability.
 
-**Architecture:** Three PydanticAI agents chained sequentially. Each has 2-3 focused tools (mix of deterministic DB queries and external calls). The pipeline orchestrator runs them per logical unit and yields SSE events. Plugs into existing FastAPI endpoint and React frontend with no frontend changes.
+**Architecture:** Three PydanticAI agents chained sequentially, each with 2-3 focused tools. Pipeline orchestrator yields SSE events with timestamps, agent badges, and confidence breakdowns. Streamlit frontend consumes events via `st.empty()` live updates. Backend stubs start with mock data, hot-swap to real FastAPI.
 
-**Tech Stack:** PydanticAI, FastAPI, aiosqlite, SQLite FTS5, sse-starlette, httpx, pytest
+**Tech Stack:** PydanticAI, FastAPI, aiosqlite, SQLite FTS5, sse-starlette, httpx, Streamlit, pytest
 
 **Working directory:** `/media/josip-rastocic/DrugiDisk/Programi/troskovljnjikov/.worktrees/boq-editor`
 
-**Run commands from:** `backend/` subdirectory (where `pyproject.toml` lives)
+**Run commands from:** `backend/` for backend tasks, project root for Streamlit tasks
 
 ---
 
@@ -101,12 +101,14 @@ Create `backend/tests/test_schemas.py`:
 from src.agent.schemas import (
     ClassResult,
     CompResult,
+    ConfidenceBreakdown,
     Deviation,
     HistoricComparison,
     HistoricPriceLine,
     LinePriceSuggestion,
     PriceRange,
     PriceResult,
+    ReasoningEntry,
 )
 
 
@@ -141,6 +143,47 @@ def test_class_result_with_deviations():
     assert result.unmatched_rows == [5, 8]
 
 
+def test_confidence_breakdown():
+    breakdown = ConfidenceBreakdown(
+        text_similarity=0.85,
+        unit_match=1.0,
+        hierarchy_match=0.7,
+        description_overlap=0.6,
+    )
+    assert breakdown.overall == 0.7875  # weighted average
+    assert breakdown.text_similarity == 0.85
+
+
+def test_historic_comparison_with_breakdown():
+    comp = HistoricComparison(
+        historic_unit_id=42,
+        project_name="Kaufland Osijek",
+        source_filename="KAUFLAND OSIJEK - ugovorni troškovnik.xlsx",
+        project_year=2025,
+        confidence=ConfidenceBreakdown(
+            text_similarity=0.88,
+            unit_match=1.0,
+            hierarchy_match=0.7,
+            description_overlap=0.65,
+        ),
+        matching_sub_items=["beton C40/50"],
+        missing_sub_items=[],
+        extra_sub_items=["armatura"],
+        qty_delta_pct=-8.0,
+        price_lines=[
+            HistoricPriceLine(
+                description="Beton",
+                unit_of_measure="m³",
+                quantity=120.0,
+                unit_price=95.0,
+            )
+        ],
+    )
+    assert comp.project_year == 2025
+    assert comp.qty_delta_pct == -8.0
+    assert comp.confidence.overall > 0.7
+
+
 def test_comp_result():
     classification = ClassResult(
         taxonomy_id="betonski-radovi",
@@ -153,10 +196,14 @@ def test_comp_result():
             HistoricComparison(
                 historic_unit_id=42,
                 project_name="Kaufland Osijek",
-                similarity_score=0.88,
-                matching_sub_items=["beton C40/50"],
-                missing_sub_items=[],
-                extra_sub_items=["armatura"],
+                source_filename="k.xlsx",
+                project_year=2025,
+                confidence=ConfidenceBreakdown(
+                    text_similarity=0.88,
+                    unit_match=1.0,
+                    hierarchy_match=0.7,
+                    description_overlap=0.65,
+                ),
                 price_lines=[
                     HistoricPriceLine(
                         description="Beton",
@@ -188,6 +235,15 @@ def test_price_result():
     )
     assert result.line_prices[0].suggested_price == 45.0
     assert result.line_prices[0].price_range.median == 44.5
+
+
+def test_reasoning_entry():
+    entry = ReasoningEntry(
+        agent="classifier",
+        message="Pronađen tip: Hidroizolacija ravnog krova (confidence: 0.85)",
+    )
+    assert entry.agent == "classifier"
+    assert entry.timestamp  # auto-generated
 ```
 
 **Step 2: Run test to verify it fails**
@@ -200,11 +256,50 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'src.agent.schemas'`
 Create `backend/src/agent/schemas.py`:
 
 ```python
-"""Pydantic schemas for the 3-stage agent pipeline."""
+"""Pydantic schemas for the 3-stage agent pipeline.
+
+These schemas are shared between:
+- Backend pipeline (agent outputs)
+- SSE events (serialized to JSON)
+- Streamlit frontend (UI models consume these directly)
+"""
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from datetime import datetime, timezone
+
+from pydantic import BaseModel, Field, computed_field
+
+
+# --- Shared: Confidence Breakdown (used by Comparator + UI confidence bars) ---
+
+class ConfidenceBreakdown(BaseModel):
+    """Per-factor confidence scores for the UI confidence panel."""
+    text_similarity: float = Field(ge=0, le=1)
+    unit_match: float = Field(ge=0, le=1)
+    hierarchy_match: float = Field(ge=0, le=1)
+    description_overlap: float = Field(ge=0, le=1)
+
+    @computed_field
+    @property
+    def overall(self) -> float:
+        """Weighted average: text 40%, unit 25%, hierarchy 20%, description 15%."""
+        return round(
+            self.text_similarity * 0.4
+            + self.unit_match * 0.25
+            + self.hierarchy_match * 0.2
+            + self.description_overlap * 0.15,
+            4,
+        )
+
+
+# --- Shared: Reasoning log entry (consumed by reasoning panel) ---
+
+class ReasoningEntry(BaseModel):
+    """Single entry in the LLM reasoning log."""
+    agent: str  # "classifier", "comparator", "pricer"
+    message: str
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 # --- Agent 1: Classifier output ---
@@ -236,10 +331,13 @@ class HistoricPriceLine(BaseModel):
 class HistoricComparison(BaseModel):
     historic_unit_id: int
     project_name: str
-    similarity_score: float = Field(ge=0, le=1)
+    source_filename: str = ""
+    project_year: int = 0
+    confidence: ConfidenceBreakdown
     matching_sub_items: list[str] = []
     missing_sub_items: list[str] = []
     extra_sub_items: list[str] = []
+    qty_delta_pct: float = 0.0  # percentage difference in total quantity
     price_lines: list[HistoricPriceLine] = []
 
 
@@ -268,18 +366,29 @@ class LinePriceSuggestion(BaseModel):
 class PriceResult(BaseModel):
     line_prices: list[LinePriceSuggestion] = []
     overall_reasoning: str = ""
+
+
+# --- Pipeline stats (consumed by stats footer) ---
+
+class PipelineStats(BaseModel):
+    """Aggregate stats emitted at pipeline completion."""
+    avg_price: float = 0.0
+    min_price: float = 0.0
+    max_price: float = 0.0
+    match_count: int = 0
+    total_suggestions: int = 0
 ```
 
 **Step 4: Run test to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_schemas.py -v`
-Expected: 4 passed
+Expected: 7 passed
 
 **Step 5: Commit**
 
 ```bash
 git add backend/src/agent/schemas.py backend/tests/test_schemas.py
-git commit -m "feat: add pipeline schemas (ClassResult, CompResult, PriceResult)"
+git commit -m "feat: add pipeline schemas with ConfidenceBreakdown and ReasoningEntry"
 ```
 
 ---
@@ -358,21 +467,18 @@ async def test_insert_and_search_standard_unit(db):
 
 @pytest.mark.asyncio
 async def test_historic_units_has_taxonomy_id(db):
-    # Insert a project first
     cursor = await db.execute(
         "INSERT INTO projects (name, source_filename, format, import_date) VALUES (?, ?, ?, ?)",
         ("Test Project", "test.xlsx", "eurospin", "2026-01-01"),
     )
     project_id = cursor.lastrowid
 
-    # Insert standard unit
     await db.execute(
         "INSERT INTO standard_units (id, label, description, category, expected_sub_items, expected_units) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         ("test-type", "Test", "Test desc", "Test cat", "[]", "[]"),
     )
 
-    # Insert historic unit with taxonomy_id
     await db.execute(
         "INSERT INTO historic_units (project_id, item_number, title, description, taxonomy_id) "
         "VALUES (?, ?, ?, ?, ?)",
@@ -392,11 +498,11 @@ Expected: FAIL — `standard_units` table doesn't exist
 
 **Step 3: Update schema**
 
-In `backend/src/db/schema.py`, append before the closing `"""`:
-
-Add after the `historic_units` table definition (after the `CREATE TABLE IF NOT EXISTS historic_lines` block):
+Replace `backend/src/db/schema.py` entirely:
 
 ```python
+"""SQLite schema for historic BoQ storage."""
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -488,8 +594,6 @@ CREATE INDEX IF NOT EXISTS idx_historic_units_taxonomy
 """
 ```
 
-**Important:** This is a full replacement of `SCHEMA_SQL`. The existing DB file at `backend/data/historic.db` (if it has data) will need to be migrated. For development, deleting and recreating it is fine. For production, run: `ALTER TABLE historic_units ADD COLUMN taxonomy_id TEXT REFERENCES standard_units(id);`
-
 **Step 4: Run test to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_db_schema.py -v`
@@ -504,1291 +608,17 @@ git commit -m "feat: add standard_units table and taxonomy_id to historic_units"
 
 ---
 
-## Task 4: Taxonomy Tools
-
-**Files:**
-- Create: `backend/src/agent/tools/__init__.py`
-- Create: `backend/src/agent/tools/taxonomy.py`
-- Create: `backend/tests/test_tools_taxonomy.py`
-
-**Step 1: Write the failing test**
-
-Create `backend/tests/test_tools_taxonomy.py`:
-
-```python
-"""Tests for taxonomy tools (match_taxonomy, check_schema)."""
-
-import json
-
-import pytest
-import pytest_asyncio
-import aiosqlite
-
-from src.db.schema import SCHEMA_SQL
-from src.agent.tools.taxonomy import match_taxonomy, check_schema
-
-
-@pytest_asyncio.fixture
-async def db():
-    conn = await aiosqlite.connect(":memory:")
-    conn.row_factory = aiosqlite.Row
-    await conn.executescript(SCHEMA_SQL)
-    # Seed two taxonomy entries
-    await conn.execute(
-        "INSERT INTO standard_units (id, label, description, category, expected_sub_items, expected_units) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (
-            "hidroizolacija-ravnog-krova",
-            "Hidroizolacija ravnog krova",
-            "Izvedba hidroizolacije ravnog krova s bitumenskim trakama uključujući parnu branu",
-            "Krovopokrivački radovi",
-            json.dumps(["parna brana", "toplinska izolacija", "hidroizolacijska membrana"]),
-            json.dumps(["m²", "m"]),
-        ),
-    )
-    await conn.execute(
-        "INSERT INTO standard_units (id, label, description, category, expected_sub_items, expected_units) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (
-            "betonski-radovi",
-            "Betonski radovi",
-            "Izvedba betonskih konstrukcija i podloga beton C40/50",
-            "Konstruktorski radovi",
-            json.dumps(["beton C40/50", "armatura", "oplata"]),
-            json.dumps(["m³", "m²", "kg"]),
-        ),
-    )
-    await conn.commit()
-    yield conn
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_match_taxonomy_finds_best_match(db):
-    results = await match_taxonomy(db, "Hidroizolacija krova s bitumenskim trakama")
-    assert len(results) >= 1
-    assert results[0]["id"] == "hidroizolacija-ravnog-krova"
-
-
-@pytest.mark.asyncio
-async def test_match_taxonomy_returns_top_3(db):
-    results = await match_taxonomy(db, "radovi izolacija beton")
-    assert len(results) <= 3
-
-
-@pytest.mark.asyncio
-async def test_match_taxonomy_no_match(db):
-    results = await match_taxonomy(db, "xyznonexistent")
-    assert len(results) == 0
-
-
-@pytest.mark.asyncio
-async def test_check_schema_all_present(db):
-    rows = [
-        {"description": "Parna brana na bazi PE folije", "unit": "m²"},
-        {"description": "Toplinska izolacija XPS 5cm", "unit": "m²"},
-        {"description": "Hidroizolacijska membrana", "unit": "m²"},
-    ]
-    result = await check_schema(db, "hidroizolacija-ravnog-krova", rows)
-    assert len(result["missing_sub_items"]) == 0
-    assert len(result["extra_sub_items"]) == 0
-
-
-@pytest.mark.asyncio
-async def test_check_schema_missing_and_extra(db):
-    rows = [
-        {"description": "Parna brana PE folija", "unit": "m²"},
-        {"description": "Vertikalna hidroizolacija uz zidove", "unit": "m"},
-    ]
-    result = await check_schema(db, "hidroizolacija-ravnog-krova", rows)
-    # "toplinska izolacija" and "hidroizolacijska membrana" are missing
-    assert "toplinska izolacija" in result["missing_sub_items"]
-    # "Vertikalna hidroizolacija uz zidove" is extra
-    assert len(result["extra_sub_items"]) >= 1
-
-
-@pytest.mark.asyncio
-async def test_check_schema_unknown_taxonomy(db):
-    result = await check_schema(db, "nonexistent-type", [])
-    assert result["error"] == "taxonomy_not_found"
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `cd backend && uv run pytest tests/test_tools_taxonomy.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'src.agent.tools'`
-
-**Step 3: Implement taxonomy tools**
-
-Create `backend/src/agent/tools/__init__.py` (empty file).
-
-Create `backend/src/agent/tools/taxonomy.py`:
-
-```python
-"""Taxonomy tools: match_taxonomy and check_schema.
-
-These are deterministic tools called by the Classifier agent.
-They query the standard_units table in SQLite.
-"""
-
-from __future__ import annotations
-
-import json
-from typing import Any
-
-import aiosqlite
-
-
-async def match_taxonomy(db: aiosqlite.Connection, description: str, limit: int = 3) -> list[dict[str, Any]]:
-    """FTS5 search against standard_units. Returns top matches with scores.
-
-    Args:
-        db: SQLite connection.
-        description: Free-text description to search for.
-        limit: Maximum results to return.
-
-    Returns:
-        List of dicts with keys: id, label, description, category, score.
-    """
-    try:
-        cursor = await db.execute(
-            """
-            SELECT su.id, su.label, su.description, su.category,
-                   rank AS score
-            FROM standard_units_fts
-            JOIN standard_units su ON su.rowid = standard_units_fts.rowid
-            WHERE standard_units_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (description, limit),
-        )
-        rows = await cursor.fetchall()
-    except Exception:
-        return []
-
-    return [
-        {
-            "id": row["id"],
-            "label": row["label"],
-            "description": row["description"],
-            "category": row["category"],
-            "score": abs(row["score"]),
-        }
-        for row in rows
-    ]
-
-
-async def check_schema(
-    db: aiosqlite.Connection,
-    taxonomy_id: str,
-    rows: list[dict[str, str]],
-) -> dict[str, Any]:
-    """Compare extracted rows against a standard unit's expected sub-items.
-
-    Args:
-        db: SQLite connection.
-        taxonomy_id: The standard unit type ID.
-        rows: List of dicts with at least a "description" key.
-
-    Returns:
-        Dict with: matched_sub_items, missing_sub_items, extra_sub_items,
-        unexpected_units, or error if taxonomy_id not found.
-    """
-    cursor = await db.execute(
-        "SELECT expected_sub_items, expected_units FROM standard_units WHERE id = ?",
-        (taxonomy_id,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        return {"error": "taxonomy_not_found"}
-
-    expected_subs: list[str] = json.loads(row["expected_sub_items"])
-    expected_units: list[str] = json.loads(row["expected_units"])
-
-    row_descriptions = [r.get("description", "").lower() for r in rows]
-    row_units = [r.get("unit", "") for r in rows]
-
-    # Match expected sub-items against row descriptions
-    matched = []
-    missing = []
-    for sub in expected_subs:
-        sub_lower = sub.lower()
-        if any(sub_lower in desc for desc in row_descriptions):
-            matched.append(sub)
-        else:
-            missing.append(sub)
-
-    # Find extra rows that don't match any expected sub-item
-    extra = []
-    for desc in row_descriptions:
-        if desc and not any(sub.lower() in desc for sub in expected_subs):
-            extra.append(desc)
-
-    # Check for unexpected units of measure
-    unexpected_units = [u for u in row_units if u and u not in expected_units]
-
-    return {
-        "matched_sub_items": matched,
-        "missing_sub_items": missing,
-        "extra_sub_items": extra,
-        "unexpected_units": unexpected_units,
-    }
-```
-
-**Step 4: Run test to verify it passes**
-
-Run: `cd backend && uv run pytest tests/test_tools_taxonomy.py -v`
-Expected: 6 passed
-
-**Step 5: Commit**
-
-```bash
-git add backend/src/agent/tools/ backend/tests/test_tools_taxonomy.py
-git commit -m "feat: add taxonomy tools (match_taxonomy, check_schema)"
-```
-
----
-
-## Task 5: Historic Tools
-
-**Files:**
-- Create: `backend/src/agent/tools/historic.py`
-- Create: `backend/tests/test_tools_historic.py`
-
-**Step 1: Write the failing test**
-
-Create `backend/tests/test_tools_historic.py`:
-
-```python
-"""Tests for historic tools (search_historic_by_taxonomy, fetch_similar)."""
-
-import json
-
-import pytest
-import pytest_asyncio
-import aiosqlite
-
-from src.db.schema import SCHEMA_SQL
-from src.agent.tools.historic import search_historic_by_taxonomy, fetch_similar
-
-
-@pytest_asyncio.fixture
-async def db():
-    conn = await aiosqlite.connect(":memory:")
-    conn.row_factory = aiosqlite.Row
-    await conn.executescript(SCHEMA_SQL)
-
-    # Seed taxonomy
-    await conn.execute(
-        "INSERT INTO standard_units (id, label, description, category, expected_sub_items, expected_units) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("hidroizolacija-ravnog-krova", "Hidroizolacija ravnog krova",
-         "Hidroizolacija", "Krovopokrivački", "[]", "[]"),
-    )
-
-    # Seed project + 2 historic units
-    await conn.execute(
-        "INSERT INTO projects (id, name, source_filename, format, import_date) VALUES (1, 'Kaufland OS', 'k.xlsx', 'kaufland', '2025-01-01')"
-    )
-    await conn.execute(
-        "INSERT INTO historic_units (id, project_id, item_number, title, description, taxonomy_id) "
-        "VALUES (10, 1, '3.1.', 'Hidroizolacija ravnog krova', 'Bitumenske trake', 'hidroizolacija-ravnog-krova')"
-    )
-    await conn.execute(
-        "INSERT INTO historic_units (id, project_id, item_number, title, description, taxonomy_id) "
-        "VALUES (11, 1, '3.2.', 'Toplinska izolacija', 'XPS ploče', NULL)"
-    )
-    # Priced lines for unit 10
-    await conn.execute(
-        "INSERT INTO historic_lines (id, unit_id, item_number, description, unit_of_measure, quantity, unit_price, total) "
-        "VALUES (100, 10, '3.1.a.', 'Parna brana', 'm²', 250.0, 12.50, 3125.0)"
-    )
-    await conn.execute(
-        "INSERT INTO historic_lines (id, unit_id, item_number, description, unit_of_measure, quantity, unit_price, total) "
-        "VALUES (101, 10, '3.1.b.', 'Membrana', 'm²', 250.0, 35.00, 8750.0)"
-    )
-    await conn.commit()
-    yield conn
-    await conn.close()
-
-
-@pytest.mark.asyncio
-async def test_search_by_taxonomy_finds_matching_units(db):
-    results = await search_historic_by_taxonomy(db, "hidroizolacija-ravnog-krova")
-    assert len(results) == 1
-    assert results[0]["title"] == "Hidroizolacija ravnog krova"
-    assert results[0]["project_name"] == "Kaufland OS"
-    assert len(results[0]["price_lines"]) == 2
-
-
-@pytest.mark.asyncio
-async def test_search_by_taxonomy_with_keywords(db):
-    results = await search_historic_by_taxonomy(
-        db, "hidroizolacija-ravnog-krova", keywords="bitumenske"
-    )
-    assert len(results) >= 1
-
-
-@pytest.mark.asyncio
-async def test_search_by_taxonomy_no_results(db):
-    results = await search_historic_by_taxonomy(db, "nonexistent-type")
-    assert len(results) == 0
-
-
-@pytest.mark.asyncio
-async def test_fetch_similar_returns_full_unit(db):
-    result = await fetch_similar(db, 10)
-    assert result is not None
-    assert result["title"] == "Hidroizolacija ravnog krova"
-    assert result["description"] == "Bitumenske trake"
-    assert len(result["price_lines"]) == 2
-    assert result["price_lines"][0]["unit_price"] == 12.50
-
-
-@pytest.mark.asyncio
-async def test_fetch_similar_not_found(db):
-    result = await fetch_similar(db, 9999)
-    assert result is None
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `cd backend && uv run pytest tests/test_tools_historic.py -v`
-Expected: FAIL — `ModuleNotFoundError`
-
-**Step 3: Implement historic tools**
-
-Create `backend/src/agent/tools/historic.py`:
-
-```python
-"""Historic tools: search_historic_by_taxonomy and fetch_similar.
-
-Deterministic tools called by the Comparator agent.
-"""
-
-from __future__ import annotations
-
-from typing import Any, Optional
-
-import aiosqlite
-
-
-async def search_historic_by_taxonomy(
-    db: aiosqlite.Connection,
-    taxonomy_id: str,
-    keywords: str = "",
-    limit: int = 5,
-) -> list[dict[str, Any]]:
-    """Search historic units filtered by taxonomy_id, optionally with FTS keywords.
-
-    Args:
-        db: SQLite connection.
-        taxonomy_id: Standard unit type to filter by.
-        keywords: Optional FTS5 search terms for further filtering.
-        limit: Max results.
-
-    Returns:
-        List of historic units with their price lines and project info.
-    """
-    if keywords:
-        cursor = await db.execute(
-            """
-            SELECT hu.id, hu.item_number, hu.title, hu.description,
-                   hu.parent_section, hu.parent_chapter,
-                   p.name AS project_name, p.source_filename
-            FROM historic_units hu
-            JOIN projects p ON p.id = hu.project_id
-            JOIN historic_units_fts ON historic_units_fts.rowid = hu.id
-            WHERE hu.taxonomy_id = ? AND historic_units_fts MATCH ?
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (taxonomy_id, keywords, limit),
-        )
-    else:
-        cursor = await db.execute(
-            """
-            SELECT hu.id, hu.item_number, hu.title, hu.description,
-                   hu.parent_section, hu.parent_chapter,
-                   p.name AS project_name, p.source_filename
-            FROM historic_units hu
-            JOIN projects p ON p.id = hu.project_id
-            WHERE hu.taxonomy_id = ?
-            LIMIT ?
-            """,
-            (taxonomy_id, limit),
-        )
-
-    rows = await cursor.fetchall()
-    results = []
-    for row in rows:
-        line_cursor = await db.execute(
-            "SELECT item_number, description, unit_of_measure, quantity, unit_price, total "
-            "FROM historic_lines WHERE unit_id = ?",
-            (row["id"],),
-        )
-        lines = await line_cursor.fetchall()
-        results.append({
-            "historic_unit_id": row["id"],
-            "title": row["title"],
-            "description": row["description"],
-            "project_name": row["project_name"],
-            "item_number": row["item_number"],
-            "price_lines": [
-                {
-                    "item_number": l["item_number"],
-                    "description": l["description"],
-                    "unit_of_measure": l["unit_of_measure"],
-                    "quantity": l["quantity"],
-                    "unit_price": l["unit_price"],
-                    "total": l["total"],
-                }
-                for l in lines
-            ],
-        })
-
-    return results
-
-
-async def fetch_similar(db: aiosqlite.Connection, unit_id: int) -> Optional[dict[str, Any]]:
-    """Fetch full details for a single historic unit.
-
-    Args:
-        db: SQLite connection.
-        unit_id: The historic_units.id to look up.
-
-    Returns:
-        Full unit dict with price lines, or None if not found.
-    """
-    cursor = await db.execute(
-        """
-        SELECT hu.id, hu.item_number, hu.title, hu.description,
-               hu.parent_section, hu.parent_chapter, hu.taxonomy_id,
-               p.name AS project_name
-        FROM historic_units hu
-        JOIN projects p ON p.id = hu.project_id
-        WHERE hu.id = ?
-        """,
-        (unit_id,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        return None
-
-    line_cursor = await db.execute(
-        "SELECT item_number, description, unit_of_measure, quantity, unit_price, total "
-        "FROM historic_lines WHERE unit_id = ?",
-        (unit_id,),
-    )
-    lines = await line_cursor.fetchall()
-
-    return {
-        "historic_unit_id": row["id"],
-        "title": row["title"],
-        "description": row["description"],
-        "project_name": row["project_name"],
-        "item_number": row["item_number"],
-        "taxonomy_id": row["taxonomy_id"],
-        "price_lines": [
-            {
-                "item_number": l["item_number"],
-                "description": l["description"],
-                "unit_of_measure": l["unit_of_measure"],
-                "quantity": l["quantity"],
-                "unit_price": l["unit_price"],
-                "total": l["total"],
-            }
-            for l in lines
-        ],
-    }
-```
-
-**Step 4: Run test to verify it passes**
-
-Run: `cd backend && uv run pytest tests/test_tools_historic.py -v`
-Expected: 5 passed
-
-**Step 5: Commit**
-
-```bash
-git add backend/src/agent/tools/historic.py backend/tests/test_tools_historic.py
-git commit -m "feat: add historic tools (search_historic_by_taxonomy, fetch_similar)"
-```
-
----
-
-## Task 6: Pricing Tools
-
-**Files:**
-- Create: `backend/src/agent/tools/pricing.py`
-- Create: `backend/tests/test_tools_pricing.py`
-
-**Step 1: Write the failing test**
-
-Create `backend/tests/test_tools_pricing.py`:
-
-```python
-"""Tests for pricing tools (diff_historic)."""
-
-from src.agent.tools.pricing import diff_historic
-
-
-def test_diff_historic_exact_match():
-    current = [
-        {"item_number": "a.", "description": "Parna brana PE folija", "unit": "m²", "quantity": 200.0},
-        {"item_number": "b.", "description": "Hidroizolacijska membrana", "unit": "m²", "quantity": 200.0},
-    ]
-    historic = [
-        {"description": "Parna brana", "unit_of_measure": "m²", "quantity": 250.0, "unit_price": 12.50},
-        {"description": "Hidroizolacijska membrana PVC", "unit_of_measure": "m²", "quantity": 250.0, "unit_price": 35.00},
-    ]
-    result = diff_historic(current, historic)
-    assert len(result["matched_pairs"]) == 2
-    assert len(result["unmatched_current"]) == 0
-    assert len(result["unmatched_historic"]) == 0
-
-
-def test_diff_historic_missing_and_extra():
-    current = [
-        {"item_number": "a.", "description": "Parna brana", "unit": "m²", "quantity": 200.0},
-        {"item_number": "b.", "description": "Vertikalna izolacija", "unit": "m", "quantity": 50.0},
-    ]
-    historic = [
-        {"description": "Parna brana", "unit_of_measure": "m²", "quantity": 250.0, "unit_price": 12.50},
-        {"description": "Toplinska izolacija XPS", "unit_of_measure": "m²", "quantity": 250.0, "unit_price": 28.00},
-    ]
-    result = diff_historic(current, historic)
-    assert len(result["matched_pairs"]) == 1  # parna brana matches
-    assert len(result["unmatched_current"]) == 1  # vertikalna izolacija
-    assert len(result["unmatched_historic"]) == 1  # toplinska izolacija
-
-
-def test_diff_historic_price_delta():
-    current = [
-        {"item_number": "a.", "description": "Beton C40/50", "unit": "m³", "quantity": 100.0},
-    ]
-    historic = [
-        {"description": "Beton C40/50", "unit_of_measure": "m³", "quantity": 120.0, "unit_price": 95.00},
-    ]
-    result = diff_historic(current, historic)
-    pair = result["matched_pairs"][0]
-    assert pair["historic_unit_price"] == 95.00
-    assert pair["quantity_delta"] == -20.0  # current has 20 less
-
-
-def test_diff_historic_empty_inputs():
-    result = diff_historic([], [])
-    assert result["matched_pairs"] == []
-    assert result["unmatched_current"] == []
-    assert result["unmatched_historic"] == []
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `cd backend && uv run pytest tests/test_tools_pricing.py -v`
-Expected: FAIL — `ModuleNotFoundError`
-
-**Step 3: Implement pricing tools**
-
-Create `backend/src/agent/tools/pricing.py`:
-
-```python
-"""Pricing tools: diff_historic.
-
-Deterministic tool called by the Pricer agent.
-"""
-
-from __future__ import annotations
-
-from difflib import SequenceMatcher
-from typing import Any
-
-
-def _similarity(a: str, b: str) -> float:
-    """Simple string similarity using SequenceMatcher."""
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
-
-
-def diff_historic(
-    current_lines: list[dict[str, Any]],
-    historic_lines: list[dict[str, Any]],
-    threshold: float = 0.4,
-) -> dict[str, Any]:
-    """Align current sub-items with historic by description similarity + unit match.
-
-    Args:
-        current_lines: List of dicts with description, unit, quantity.
-        historic_lines: List of dicts with description, unit_of_measure, quantity, unit_price.
-        threshold: Minimum similarity score to consider a match.
-
-    Returns:
-        Dict with matched_pairs, unmatched_current, unmatched_historic.
-    """
-    used_historic = set()
-    matched_pairs = []
-
-    for curr in current_lines:
-        curr_desc = curr.get("description", "")
-        curr_unit = curr.get("unit", "")
-        best_match = None
-        best_score = threshold
-
-        for i, hist in enumerate(historic_lines):
-            if i in used_historic:
-                continue
-            hist_desc = hist.get("description", "")
-            hist_unit = hist.get("unit_of_measure", "")
-
-            # Description similarity
-            score = _similarity(curr_desc, hist_desc)
-            # Boost if units match
-            if curr_unit and hist_unit and curr_unit == hist_unit:
-                score += 0.2
-
-            if score > best_score:
-                best_score = score
-                best_match = i
-
-        if best_match is not None:
-            used_historic.add(best_match)
-            hist = historic_lines[best_match]
-            matched_pairs.append({
-                "current_item_number": curr.get("item_number", ""),
-                "current_description": curr_desc,
-                "historic_description": hist.get("description", ""),
-                "current_unit": curr_unit,
-                "historic_unit": hist.get("unit_of_measure", ""),
-                "current_quantity": curr.get("quantity", 0.0),
-                "historic_quantity": hist.get("quantity", 0.0),
-                "quantity_delta": curr.get("quantity", 0.0) - hist.get("quantity", 0.0),
-                "historic_unit_price": hist.get("unit_price"),
-                "similarity_score": round(best_score, 3),
-            })
-
-    unmatched_current = [
-        curr for j, curr in enumerate(current_lines)
-        if not any(p["current_item_number"] == curr.get("item_number", "") for p in matched_pairs)
-    ]
-    unmatched_historic = [
-        hist for k, hist in enumerate(historic_lines) if k not in used_historic
-    ]
-
-    return {
-        "matched_pairs": matched_pairs,
-        "unmatched_current": unmatched_current,
-        "unmatched_historic": unmatched_historic,
-    }
-```
-
-**Step 4: Run test to verify it passes**
-
-Run: `cd backend && uv run pytest tests/test_tools_pricing.py -v`
-Expected: 4 passed
-
-**Step 5: Commit**
-
-```bash
-git add backend/src/agent/tools/pricing.py backend/tests/test_tools_pricing.py
-git commit -m "feat: add pricing tools (diff_historic)"
-```
-
----
-
-## Task 7: External Tools
-
-**Files:**
-- Create: `backend/src/agent/tools/external.py`
-- Create: `backend/tests/test_tools_external.py`
-
-**Step 1: Write the failing test**
-
-Create `backend/tests/test_tools_external.py`:
-
-```python
-"""Tests for external tools (search_web, summarize).
-
-These tests use mocks since they depend on external services and the LLM.
-"""
-
-from unittest.mock import AsyncMock, patch
-
-import pytest
-
-from src.agent.tools.external import search_web, summarize
-
-
-@pytest.mark.asyncio
-async def test_search_web_returns_snippets():
-    mock_response = AsyncMock()
-    mock_response.status_code = 200
-    mock_response.json = lambda: {
-        "results": [
-            {"title": "Cijene betona 2026", "snippet": "Prosječna cijena betona C40/50 je 95 EUR/m³", "url": "https://example.com"}
-        ]
-    }
-    mock_response.raise_for_status = lambda: None
-
-    with patch("src.agent.tools.external.httpx.AsyncClient") as mock_client_cls:
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client_cls.return_value = mock_client
-
-        results = await search_web("cijena betona C40/50 2026")
-        assert isinstance(results, list)
-
-
-@pytest.mark.asyncio
-async def test_summarize_calls_llm():
-    mock_response = AsyncMock()
-    mock_response.choices = [AsyncMock(message=AsyncMock(content="Sažetak teksta."))]
-
-    with patch("src.agent.tools.external.openai.AsyncOpenAI") as mock_oai_cls:
-        mock_client = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
-        mock_oai_cls.return_value = mock_client
-
-        result = await summarize("Dugačak tekst o cijenama građevinskog materijala...")
-        assert isinstance(result, str)
-        assert len(result) > 0
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `cd backend && uv run pytest tests/test_tools_external.py -v`
-Expected: FAIL — `ModuleNotFoundError`
-
-**Step 3: Implement external tools**
-
-Create `backend/src/agent/tools/external.py`:
-
-```python
-"""External tools: search_web and summarize.
-
-Non-deterministic tools called by the Pricer agent.
-search_web performs HTTP requests; summarize calls the local LLM.
-"""
-
-from __future__ import annotations
-
-import httpx
-import openai
-
-from ...config import LLM_BASE_URL, LLM_MODEL_NAME
-
-
-async def search_web(query: str, max_results: int = 3) -> list[dict[str, str]]:
-    """Search the web for current material prices or construction info.
-
-    Uses a simple HTTP search. Returns a list of result snippets.
-
-    Args:
-        query: Search query string.
-        max_results: Maximum number of results to return.
-
-    Returns:
-        List of dicts with title, snippet, url keys.
-    """
-    # Simple DuckDuckGo instant answer API (no API key needed)
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                "https://api.duckduckgo.com/",
-                params={"q": query, "format": "json", "no_html": 1},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-        results = []
-        # Abstract text
-        if data.get("AbstractText"):
-            results.append({
-                "title": data.get("Heading", query),
-                "snippet": data["AbstractText"],
-                "url": data.get("AbstractURL", ""),
-            })
-        # Related topics
-        for topic in data.get("RelatedTopics", [])[:max_results]:
-            if isinstance(topic, dict) and "Text" in topic:
-                results.append({
-                    "title": topic.get("Text", "")[:80],
-                    "snippet": topic.get("Text", ""),
-                    "url": topic.get("FirstURL", ""),
-                })
-
-        return results[:max_results]
-    except Exception:
-        return []
-
-
-async def summarize(text: str, max_tokens: int = 200) -> str:
-    """Summarize text using the local LLM.
-
-    Args:
-        text: Text to summarize.
-        max_tokens: Maximum tokens in summary.
-
-    Returns:
-        Summarized text string.
-    """
-    client = openai.AsyncOpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
-    try:
-        response = await client.chat.completions.create(
-            model=LLM_MODEL_NAME,
-            messages=[
-                {"role": "system", "content": "Sažmi sljedeći tekst u 2-3 rečenice. Zadrži ključne brojke i cijene."},
-                {"role": "user", "content": text},
-            ],
-            max_tokens=max_tokens,
-        )
-        return response.choices[0].message.content or ""
-    except Exception as e:
-        return f"Greška pri sažimanju: {e}"
-```
-
-**Note:** The import path uses relative import `from ...config`. This works because `tools/` is inside `agent/` which is inside `src/`. Verify this matches the actual package structure. If it fails, switch to `from src.config import ...`.
-
-**Step 4: Run test to verify it passes**
-
-Run: `cd backend && uv run pytest tests/test_tools_external.py -v`
-Expected: 2 passed
-
-**Step 5: Commit**
-
-```bash
-git add backend/src/agent/tools/external.py backend/tests/test_tools_external.py
-git commit -m "feat: add external tools (search_web, summarize)"
-```
-
----
-
-## Task 8: Classifier Agent
-
-**Files:**
-- Create: `backend/src/agent/classifier_agent.py`
-- Create: `backend/tests/test_classifier_agent.py`
-
-**Step 1: Write the failing test**
-
-Create `backend/tests/test_classifier_agent.py`:
-
-```python
-"""Tests for the Classifier agent.
-
-Uses a mock model to avoid needing a running LLM server.
-"""
-
-import json
-from unittest.mock import AsyncMock, patch
-
-import pytest
-import pytest_asyncio
-import aiosqlite
-
-from src.db.schema import SCHEMA_SQL
-from src.agent.classifier_agent import create_classifier_agent, ClassifierDeps
-from src.agent.schemas import ClassResult
-
-
-@pytest_asyncio.fixture
-async def db():
-    conn = await aiosqlite.connect(":memory:")
-    conn.row_factory = aiosqlite.Row
-    await conn.executescript(SCHEMA_SQL)
-    await conn.execute(
-        "INSERT INTO standard_units (id, label, description, category, expected_sub_items, expected_units) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (
-            "hidroizolacija-ravnog-krova",
-            "Hidroizolacija ravnog krova",
-            "Izvedba hidroizolacije ravnog krova s bitumenskim trakama",
-            "Krovopokrivački radovi",
-            json.dumps(["parna brana", "toplinska izolacija", "hidroizolacijska membrana"]),
-            json.dumps(["m²", "m"]),
-        ),
-    )
-    await conn.commit()
-    yield conn
-    await conn.close()
-
-
-def test_classifier_agent_has_tools():
-    agent = create_classifier_agent()
-    tool_names = [t.name for t in agent._function_tools.values()]
-    assert "match_taxonomy" in tool_names
-    assert "check_schema" in tool_names
-
-
-def test_classifier_deps_holds_db(db):
-    deps = ClassifierDeps(db=db)
-    assert deps.db is db
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `cd backend && uv run pytest tests/test_classifier_agent.py -v`
-Expected: FAIL — `ModuleNotFoundError`
-
-**Step 3: Implement classifier agent**
-
-Create `backend/src/agent/classifier_agent.py`:
-
-```python
-"""Agent 1: Classifier — maps raw Excel rows to standard taxonomy types."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-import aiosqlite
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
-
-from ..config import LLM_BASE_URL, LLM_MODEL_NAME
-from .schemas import ClassResult
-from .tools.taxonomy import match_taxonomy as _match_taxonomy
-from .tools.taxonomy import check_schema as _check_schema
-
-
-@dataclass
-class ClassifierDeps:
-    db: aiosqlite.Connection
-
-
-def create_classifier_agent() -> Agent[ClassifierDeps, ClassResult]:
-    """Create and configure the Classifier agent."""
-    provider = OpenAIProvider(base_url=LLM_BASE_URL)
-    model = OpenAIChatModel(model_name=LLM_MODEL_NAME, provider=provider)
-
-    agent = Agent(
-        model,
-        output_type=ClassResult,
-        deps_type=ClassifierDeps,
-        system_prompt=(
-            "Ti si klasifikator građevinskih stavki iz Excel troškovnika.\n"
-            "Dobivat ćeš opis stavke s redovima iz troškovnika.\n"
-            "Koristi alat match_taxonomy da pronađeš odgovarajući standardni tip.\n"
-            "Zatim koristi check_schema da provjeriš podudaraju li se podstavke.\n"
-            "Vrati taxonomy_id, confidence (0-1), i popis odstupanja.\n"
-            "Ako nijedan tip ne odgovara, postavi confidence na 0 i taxonomy_id na 'nepoznato'."
-        ),
-        retries=2,
-    )
-
-    @agent.tool
-    async def match_taxonomy(ctx: RunContext[ClassifierDeps], description: str) -> str:
-        """Search standard unit taxonomy by description. Returns top-3 matches as JSON."""
-        results = await _match_taxonomy(ctx.deps.db, description)
-        return str(results)
-
-    @agent.tool
-    async def check_schema(ctx: RunContext[ClassifierDeps], taxonomy_id: str, rows_json: str) -> str:
-        """Check extracted rows against a standard unit's expected sub-items.
-
-        Args:
-            taxonomy_id: The standard unit type ID to check against.
-            rows_json: JSON string of list of dicts with 'description' and 'unit' keys.
-        """
-        import json
-        try:
-            rows = json.loads(rows_json)
-        except json.JSONDecodeError:
-            return '{"error": "invalid JSON"}'
-        result = await _check_schema(ctx.deps.db, taxonomy_id, rows)
-        return str(result)
-
-    return agent
-```
-
-**Step 4: Run test to verify it passes**
-
-Run: `cd backend && uv run pytest tests/test_classifier_agent.py -v`
-Expected: 2 passed
-
-**Step 5: Commit**
-
-```bash
-git add backend/src/agent/classifier_agent.py backend/tests/test_classifier_agent.py
-git commit -m "feat: add Classifier agent with taxonomy tools"
-```
-
----
-
-## Task 9: Comparator Agent
-
-**Files:**
-- Create: `backend/src/agent/comparator_agent.py`
-- Create: `backend/tests/test_comparator_agent.py`
-
-**Step 1: Write the failing test**
-
-Create `backend/tests/test_comparator_agent.py`:
-
-```python
-"""Tests for the Comparator agent."""
-
-import pytest
-import pytest_asyncio
-import aiosqlite
-
-from src.db.schema import SCHEMA_SQL
-from src.agent.comparator_agent import create_comparator_agent, ComparatorDeps
-from src.agent.schemas import ClassResult
-
-
-@pytest_asyncio.fixture
-async def db():
-    conn = await aiosqlite.connect(":memory:")
-    conn.row_factory = aiosqlite.Row
-    await conn.executescript(SCHEMA_SQL)
-    yield conn
-    await conn.close()
-
-
-def test_comparator_agent_has_tools():
-    agent = create_comparator_agent()
-    tool_names = [t.name for t in agent._function_tools.values()]
-    assert "search_historic" in tool_names
-    assert "fetch_similar" in tool_names
-
-
-def test_comparator_deps_holds_classification(db):
-    classification = ClassResult(
-        taxonomy_id="test", taxonomy_label="Test", confidence=0.9
-    )
-    deps = ComparatorDeps(db=db, classification=classification)
-    assert deps.classification.taxonomy_id == "test"
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `cd backend && uv run pytest tests/test_comparator_agent.py -v`
-Expected: FAIL — `ModuleNotFoundError`
-
-**Step 3: Implement comparator agent**
-
-Create `backend/src/agent/comparator_agent.py`:
-
-```python
-"""Agent 2: Comparator — finds and compares historic units for a classified type."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-import aiosqlite
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
-
-from ..config import LLM_BASE_URL, LLM_MODEL_NAME
-from .schemas import ClassResult, CompResult
-from .tools.historic import search_historic_by_taxonomy as _search
-from .tools.historic import fetch_similar as _fetch
-
-
-@dataclass
-class ComparatorDeps:
-    db: aiosqlite.Connection
-    classification: ClassResult
-
-
-def create_comparator_agent() -> Agent[ComparatorDeps, CompResult]:
-    """Create and configure the Comparator agent."""
-    provider = OpenAIProvider(base_url=LLM_BASE_URL)
-    model = OpenAIChatModel(model_name=LLM_MODEL_NAME, provider=provider)
-
-    agent = Agent(
-        model,
-        output_type=CompResult,
-        deps_type=ComparatorDeps,
-        system_prompt=(
-            "Ti si uspoređivač građevinskih stavki.\n"
-            "Dobivaš klasificiranu stavku s taxonomy_id.\n"
-            "Koristi search_historic da pronađeš historijske stavke istog tipa.\n"
-            "Ako trebaš više detalja o nekoj stavci, koristi fetch_similar.\n"
-            "Vrati popis usporedbi sa sličnostima i razlikama.\n"
-            "Uključi classification objekt iz ulaza u svoj odgovor."
-        ),
-        retries=2,
-    )
-
-    @agent.tool
-    async def search_historic(
-        ctx: RunContext[ComparatorDeps], keywords: str = ""
-    ) -> str:
-        """Search historic units matching the classified taxonomy type.
-
-        Args:
-            keywords: Optional additional search terms to narrow results.
-        """
-        taxonomy_id = ctx.deps.classification.taxonomy_id
-        results = await _search(ctx.deps.db, taxonomy_id, keywords=keywords)
-        return str(results)
-
-    @agent.tool
-    async def fetch_similar(ctx: RunContext[ComparatorDeps], unit_id: int) -> str:
-        """Fetch full details for a specific historic unit by ID."""
-        result = await _fetch(ctx.deps.db, unit_id)
-        return str(result) if result else '{"error": "not found"}'
-
-    return agent
-```
-
-**Step 4: Run test to verify it passes**
-
-Run: `cd backend && uv run pytest tests/test_comparator_agent.py -v`
-Expected: 2 passed
-
-**Step 5: Commit**
-
-```bash
-git add backend/src/agent/comparator_agent.py backend/tests/test_comparator_agent.py
-git commit -m "feat: add Comparator agent with historic tools"
-```
-
----
-
-## Task 10: Pricer Agent
-
-**Files:**
-- Create: `backend/src/agent/pricer_agent.py`
-- Create: `backend/tests/test_pricer_agent.py`
-
-**Step 1: Write the failing test**
-
-Create `backend/tests/test_pricer_agent.py`:
-
-```python
-"""Tests for the Pricer agent."""
-
-from src.agent.pricer_agent import create_pricer_agent, PricerDeps
-from src.agent.schemas import ClassResult, CompResult
-
-
-def test_pricer_agent_has_tools():
-    agent = create_pricer_agent()
-    tool_names = [t.name for t in agent._function_tools.values()]
-    assert "diff_historic" in tool_names
-    assert "search_web" in tool_names
-    assert "summarize" in tool_names
-
-
-def test_pricer_deps_holds_comparison():
-    classification = ClassResult(
-        taxonomy_id="test", taxonomy_label="Test", confidence=0.9
-    )
-    comparison = CompResult(
-        classification=classification,
-        matches=[],
-        summary="No matches",
-    )
-    deps = PricerDeps(comparison=comparison)
-    assert deps.comparison.summary == "No matches"
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `cd backend && uv run pytest tests/test_pricer_agent.py -v`
-Expected: FAIL — `ModuleNotFoundError`
-
-**Step 3: Implement pricer agent**
-
-Create `backend/src/agent/pricer_agent.py`:
-
-```python
-"""Agent 3: Pricer — reasons about pricing using diffs, web search, and summarization."""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
-
-from ..config import LLM_BASE_URL, LLM_MODEL_NAME
-from .schemas import CompResult, PriceResult
-from .tools.pricing import diff_historic as _diff
-from .tools.external import search_web as _search_web
-from .tools.external import summarize as _summarize
-
-
-@dataclass
-class PricerDeps:
-    comparison: CompResult
-
-
-def create_pricer_agent() -> Agent[PricerDeps, PriceResult]:
-    """Create and configure the Pricer agent."""
-    provider = OpenAIProvider(base_url=LLM_BASE_URL)
-    model = OpenAIChatModel(model_name=LLM_MODEL_NAME, provider=provider)
-
-    agent = Agent(
-        model,
-        output_type=PriceResult,
-        deps_type=PricerDeps,
-        system_prompt=(
-            "Ti si stručnjak za određivanje cijena građevinskih radova.\n"
-            "Dobivaš klasificiranu stavku i historijske usporedbe.\n"
-            "Koristi diff_historic da usporediš trenutne podstavke s historijskima.\n"
-            "Ako nešto izgleda neobično, koristi search_web za provjeru tržišnih cijena.\n"
-            "Koristi summarize za sažimanje dugačkih tekstova.\n"
-            "Predloži realnu cijenu za svaku podstavku s obrazloženjem.\n"
-            "Uključi price_range (low, high, median) iz historijskih podataka."
-        ),
-        retries=2,
-    )
-
-    @agent.tool
-    async def diff_historic(
-        ctx: RunContext[PricerDeps],
-        current_lines_json: str,
-        historic_lines_json: str,
-    ) -> str:
-        """Compare current sub-items with historic ones.
-
-        Args:
-            current_lines_json: JSON list of current items (description, unit, quantity).
-            historic_lines_json: JSON list of historic items (description, unit_of_measure, quantity, unit_price).
-        """
-        import json
-        try:
-            current = json.loads(current_lines_json)
-            historic = json.loads(historic_lines_json)
-        except json.JSONDecodeError:
-            return '{"error": "invalid JSON"}'
-        result = _diff(current, historic)
-        return str(result)
-
-    @agent.tool
-    async def search_web(ctx: RunContext[PricerDeps], query: str) -> str:
-        """Search the web for current material prices or construction cost data."""
-        results = await _search_web(query)
-        return str(results)
-
-    @agent.tool
-    async def summarize(ctx: RunContext[PricerDeps], text: str) -> str:
-        """Summarize a long text into 2-3 key sentences."""
-        return await _summarize(text)
-
-    return agent
-```
-
-**Step 4: Run test to verify it passes**
-
-Run: `cd backend && uv run pytest tests/test_pricer_agent.py -v`
-Expected: 2 passed
-
-**Step 5: Commit**
-
-```bash
-git add backend/src/agent/pricer_agent.py backend/tests/test_pricer_agent.py
-git commit -m "feat: add Pricer agent with diff, web search, and summarize tools"
-```
+## Tasks 4-10: Backend Tools & Agents
+
+Tasks 4-10 are unchanged from the original plan. See original plan sections for:
+
+- **Task 4**: Taxonomy Tools (`match_taxonomy`, `check_schema`)
+- **Task 5**: Historic Tools (`search_historic_by_taxonomy`, `fetch_similar`)
+- **Task 6**: Pricing Tools (`diff_historic`)
+- **Task 7**: External Tools (`search_web`, `summarize`)
+- **Task 8**: Classifier Agent
+- **Task 9**: Comparator Agent
+- **Task 10**: Pricer Agent
 
 ---
 
@@ -1812,10 +642,11 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
-from src.agent.pipeline import run_pipeline
+from src.agent.pipeline import run_pipeline, PIPELINE_STAGES
 from src.agent.schemas import (
     ClassResult,
     CompResult,
+    ConfidenceBreakdown,
     HistoricComparison,
     HistoricPriceLine,
     LinePriceSuggestion,
@@ -1837,6 +668,12 @@ def sample_unit():
     )
 
 
+def test_pipeline_stages_defined():
+    assert len(PIPELINE_STAGES) == 6
+    assert PIPELINE_STAGES[0] == "upload"
+    assert PIPELINE_STAGES[-1] == "review"
+
+
 @pytest.mark.asyncio
 async def test_pipeline_yields_correct_event_sequence(sample_unit):
     mock_class_result = ClassResult(
@@ -1848,7 +685,14 @@ async def test_pipeline_yields_correct_event_sequence(sample_unit):
             HistoricComparison(
                 historic_unit_id=1,
                 project_name="Test Project",
-                similarity_score=0.8,
+                source_filename="test.xlsx",
+                project_year=2025,
+                confidence=ConfidenceBreakdown(
+                    text_similarity=0.88,
+                    unit_match=1.0,
+                    hierarchy_match=0.7,
+                    description_overlap=0.65,
+                ),
                 price_lines=[HistoricPriceLine(description="Parna brana", unit_of_measure="m²", quantity=250, unit_price=12.5)],
             )
         ],
@@ -1867,7 +711,6 @@ async def test_pipeline_yields_correct_event_sequence(sample_unit):
         overall_reasoning="Price OK",
     )
 
-    # Mock all three agents
     with patch("src.agent.pipeline.create_classifier_agent") as mock_cls, \
          patch("src.agent.pipeline.create_comparator_agent") as mock_cmp, \
          patch("src.agent.pipeline.create_pricer_agent") as mock_prc, \
@@ -1888,20 +731,30 @@ async def test_pipeline_yields_correct_event_sequence(sample_unit):
 
         events = []
         async for event_type, data in run_pipeline(sample_unit):
-            events.append(event_type)
+            events.append((event_type, data))
 
-        assert "classification_start" in events
-        assert "classification" in events
-        assert "comparison_start" in events
-        assert "historic_match" in events
-        assert "pricing_start" in events
-        assert "suggestion" in events
-        assert "complete" in events
+        event_types = [e[0] for e in events]
+
+        # Pipeline stage events
+        assert "pipeline_stage" in event_types
+        # Agent events
+        assert "reasoning" in event_types
+        assert "classification" in event_types
+        assert "historic_match" in event_types
+        assert "confidence_breakdown" in event_types
+        assert "suggestion" in event_types
+        assert "stats" in event_types
+        assert "complete" in event_types
+
         # Correct order
-        assert events.index("classification_start") < events.index("classification")
-        assert events.index("classification") < events.index("comparison_start")
-        assert events.index("comparison_start") < events.index("suggestion")
-        assert events.index("suggestion") < events.index("complete")
+        assert event_types.index("classification") < event_types.index("historic_match")
+        assert event_types.index("historic_match") < event_types.index("suggestion")
+        assert event_types.index("suggestion") < event_types.index("complete")
+
+        # Reasoning entries have agent badge
+        reasoning_events = [e for e in events if e[0] == "reasoning"]
+        agents_seen = {e[1]["agent"] for e in reasoning_events}
+        assert "classifier" in agents_seen
 ```
 
 **Step 2: Run test to verify it fails**
@@ -1914,11 +767,20 @@ Expected: FAIL — `ModuleNotFoundError`
 Create `backend/src/agent/pipeline.py`:
 
 ```python
-"""Pipeline orchestrator: runs Classifier → Comparator → Pricer sequentially."""
+"""Pipeline orchestrator: runs Classifier → Comparator → Pricer sequentially.
+
+Emits rich SSE events for the Streamlit UI:
+- pipeline_stage: current stage for pipeline bar
+- reasoning: log entries with agent badge + timestamp
+- classification, historic_match, confidence_breakdown, suggestion: data events
+- stats: aggregate stats for footer
+- complete: pipeline finished
+"""
 
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 from ..db.database import get_db
@@ -1926,10 +788,26 @@ from ..models.boq import LogicalUnit
 from .classifier_agent import ClassifierDeps, create_classifier_agent
 from .comparator_agent import ComparatorDeps, create_comparator_agent
 from .pricer_agent import PricerDeps, create_pricer_agent
+from .schemas import PipelineStats, ReasoningEntry
+
+# Pipeline bar stages (matches Streamlit header component)
+PIPELINE_STAGES = ["upload", "parse", "index", "match", "suggest", "review"]
+
+
+def _ts() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _reasoning(agent: str, message: str) -> tuple[str, dict[str, Any]]:
+    entry = ReasoningEntry(agent=agent, message=message)
+    return ("reasoning", entry.model_dump())
+
+
+def _stage(stage: str) -> tuple[str, dict[str, Any]]:
+    return ("pipeline_stage", {"stage": stage, "timestamp": _ts()})
 
 
 def _format_unit_for_classifier(unit: LogicalUnit) -> str:
-    """Format a logical unit's data as text for the Classifier agent."""
     lines = [f"Stavka: {unit.item_number} — {unit.title}"]
     if unit.description:
         lines.append(f"Opis: {unit.description}")
@@ -1941,12 +819,10 @@ def _format_unit_for_classifier(unit: LogicalUnit) -> str:
 
 
 def _format_for_comparator(classification_json: str) -> str:
-    """Format classification result as text for the Comparator agent."""
     return f"Klasificirana stavka:\n{classification_json}\n\nPronađi historijske stavke istog tipa i usporedi ih."
 
 
 def _format_for_pricer(unit: LogicalUnit, comparison_json: str) -> str:
-    """Format comparison result + current unit for the Pricer agent."""
     lines = [f"Trenutna stavka: {unit.item_number} — {unit.title}"]
     lines.append("Trenutne podstavke (JSON):")
     current_lines = [
@@ -1963,11 +839,13 @@ async def run_pipeline(unit: LogicalUnit) -> AsyncIterator[tuple[str, dict[str, 
     """Run the 3-stage agent pipeline for a logical unit.
 
     Yields (event_type, data) tuples for SSE streaming.
+    Events include timestamps and agent badges for the Streamlit reasoning panel.
     """
     db = await get_db()
 
-    # --- Stage 1: Classifier ---
-    yield ("classification_start", {"unit_id": unit.id})
+    # --- Stage 1: Classifier (pipeline: index) ---
+    yield _stage("index")
+    yield _reasoning("classifier", f"Klasificiram stavku: {unit.title}")
 
     classifier = create_classifier_agent()
     class_result = await classifier.run(
@@ -1977,9 +855,16 @@ async def run_pipeline(unit: LogicalUnit) -> AsyncIterator[tuple[str, dict[str, 
     classification = class_result.output
 
     yield ("classification", classification.model_dump())
+    yield _reasoning("classifier",
+        f"Pronađen tip: {classification.taxonomy_label} (confidence: {classification.confidence})")
 
-    # --- Stage 2: Comparator ---
-    yield ("comparison_start", {"taxonomy_id": classification.taxonomy_id})
+    if classification.deviations:
+        devs = ", ".join(d.description for d in classification.deviations)
+        yield _reasoning("classifier", f"Odstupanja od standarda: {devs}")
+
+    # --- Stage 2: Comparator (pipeline: match) ---
+    yield _stage("match")
+    yield _reasoning("comparator", f"Tražim historijske stavke za tip: {classification.taxonomy_id}")
 
     comparator = create_comparator_agent()
     classification_json = classification.model_dump_json()
@@ -1989,11 +874,24 @@ async def run_pipeline(unit: LogicalUnit) -> AsyncIterator[tuple[str, dict[str, 
     )
     comparison = comp_result.output
 
+    yield _reasoning("comparator",
+        f"Pronađeno {len(comparison.matches)} historijskih podudaranja")
+
     for match in comparison.matches:
         yield ("historic_match", match.model_dump())
+        yield ("confidence_breakdown", {
+            "historic_unit_id": match.historic_unit_id,
+            "project_name": match.project_name,
+            "breakdown": match.confidence.model_dump(),
+        })
+        yield _reasoning("comparator",
+            f"  {match.project_name} ({match.project_year}): "
+            f"sličnost {match.confidence.overall:.0%}, "
+            f"qty Δ {match.qty_delta_pct:+.1f}%")
 
-    # --- Stage 3: Pricer ---
-    yield ("pricing_start", {"unit_id": unit.id})
+    # --- Stage 3: Pricer (pipeline: suggest) ---
+    yield _stage("suggest")
+    yield _reasoning("pricer", "Analiziram cijene na temelju historijskih podataka")
 
     pricer = create_pricer_agent()
     comparison_json = comparison.model_dump_json()
@@ -2002,282 +900,944 @@ async def run_pipeline(unit: LogicalUnit) -> AsyncIterator[tuple[str, dict[str, 
         deps=PricerDeps(comparison=comparison),
     )
 
+    all_prices = []
     for suggestion in price_result.output.line_prices:
         yield ("suggestion", suggestion.model_dump())
+        all_prices.append(suggestion.suggested_price)
+        yield _reasoning("pricer",
+            f"  {suggestion.item_number}: {suggestion.suggested_price:.2f} EUR "
+            f"(confidence: {suggestion.confidence:.0%})")
 
+    if price_result.output.overall_reasoning:
+        yield _reasoning("pricer", price_result.output.overall_reasoning)
+
+    # --- Stats for footer ---
+    stats = PipelineStats(
+        avg_price=sum(all_prices) / len(all_prices) if all_prices else 0,
+        min_price=min(all_prices) if all_prices else 0,
+        max_price=max(all_prices) if all_prices else 0,
+        match_count=len(comparison.matches),
+        total_suggestions=len(all_prices),
+    )
+    yield ("stats", stats.model_dump())
+
+    # --- Complete (pipeline: review) ---
+    yield _stage("review")
     yield ("complete", {})
 ```
 
 **Step 4: Run test to verify it passes**
 
 Run: `cd backend && uv run pytest tests/test_pipeline.py -v`
-Expected: 1 passed
+Expected: 2 passed
 
 **Step 5: Commit**
 
 ```bash
 git add backend/src/agent/pipeline.py backend/tests/test_pipeline.py
-git commit -m "feat: add pipeline orchestrator (Classifier → Comparator → Pricer)"
+git commit -m "feat: add pipeline orchestrator with rich SSE events for Streamlit UI"
 ```
 
 ---
 
 ## Task 12: API Integration
 
-**Files:**
-- Modify: `backend/src/api/agent.py`
-- Create: `backend/src/api/taxonomy.py`
-- Modify: `backend/src/api/router.py`
-- Delete: `backend/src/agent/price_agent.py`
-
-**Step 1: Update agent endpoint to use pipeline**
-
-Replace `backend/src/api/agent.py` entirely:
-
-```python
-"""SSE endpoint for agent price suggestions."""
-
-import json
-
-from fastapi import APIRouter, HTTPException
-from sse_starlette.sse import EventSourceResponse
-
-from ..models.agent import SuggestRequest
-from ..agent.pipeline import run_pipeline
-from .upload import get_current_boq
-
-router = APIRouter()
-
-
-@router.post("/agent/suggest")
-async def suggest_prices(body: SuggestRequest):
-    boq = get_current_boq()
-    if not boq:
-        raise HTTPException(404, "No BoQ uploaded yet")
-
-    unit = None
-    for u in boq.units:
-        if u.id == body.unit_id:
-            unit = u
-            break
-    if not unit:
-        raise HTTPException(404, f"Unit {body.unit_id} not found")
-
-    async def event_stream():
-        async for event_type, data in run_pipeline(unit):
-            yield {"event": event_type, "data": json.dumps(data, ensure_ascii=False)}
-
-    return EventSourceResponse(event_stream())
-```
-
-**Step 2: Create taxonomy API**
-
-Create `backend/src/api/taxonomy.py`:
-
-```python
-"""CRUD endpoints for the standard unit taxonomy."""
-
-import json
-from typing import Any
-
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-
-from ..db.database import get_db
-
-router = APIRouter()
-
-
-class StandardUnitCreate(BaseModel):
-    id: str
-    label: str
-    description: str
-    category: str
-    expected_sub_items: list[str] = []
-    expected_units: list[str] = []
-
-
-class TaxonomySeedRequest(BaseModel):
-    units: list[StandardUnitCreate]
-
-
-@router.get("/taxonomy")
-async def list_taxonomy() -> list[dict[str, Any]]:
-    db = await get_db()
-    cursor = await db.execute(
-        "SELECT id, label, description, category, expected_sub_items, expected_units FROM standard_units"
-    )
-    rows = await cursor.fetchall()
-    return [
-        {
-            "id": row["id"],
-            "label": row["label"],
-            "description": row["description"],
-            "category": row["category"],
-            "expected_sub_items": json.loads(row["expected_sub_items"]),
-            "expected_units": json.loads(row["expected_units"]),
-        }
-        for row in rows
-    ]
-
-
-@router.post("/taxonomy/seed")
-async def seed_taxonomy(body: TaxonomySeedRequest) -> dict[str, int]:
-    db = await get_db()
-    count = 0
-    for unit in body.units:
-        await db.execute(
-            "INSERT OR REPLACE INTO standard_units (id, label, description, category, expected_sub_items, expected_units) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                unit.id,
-                unit.label,
-                unit.description,
-                unit.category,
-                json.dumps(unit.expected_sub_items, ensure_ascii=False),
-                json.dumps(unit.expected_units, ensure_ascii=False),
-            ),
-        )
-        count += 1
-    await db.commit()
-    return {"seeded_count": count}
-```
-
-**Step 3: Update router**
-
-In `backend/src/api/router.py`, add the taxonomy router:
-
-```python
-from fastapi import APIRouter
-
-from .upload import router as upload_router
-from .units import router as units_router
-from .historic import router as historic_router
-from .agent import router as agent_router
-from .output import router as output_router
-from .export import router as export_router
-from .taxonomy import router as taxonomy_router
-
-router = APIRouter()
-router.include_router(upload_router, tags=["upload"])
-router.include_router(units_router, tags=["units"])
-router.include_router(historic_router, tags=["historic"])
-router.include_router(agent_router, tags=["agent"])
-router.include_router(output_router, tags=["output"])
-router.include_router(export_router, tags=["export"])
-router.include_router(taxonomy_router, tags=["taxonomy"])
-```
-
-**Step 4: Delete old price_agent**
-
-Run: `rm backend/src/agent/price_agent.py`
-
-**Step 5: Verify app starts**
-
-Run: `cd backend && uv run python -c "from src.main import app; print('OK')"`
-Expected: `OK`
-
-**Step 6: Commit**
-
-```bash
-git add backend/src/api/agent.py backend/src/api/taxonomy.py backend/src/api/router.py
-git rm backend/src/agent/price_agent.py
-git commit -m "feat: wire pipeline into API, add taxonomy endpoints, remove old price_agent"
-```
+Unchanged from original plan. Swap `run_price_suggestion()` for `run_pipeline()` in `api/agent.py`, add `api/taxonomy.py`, update `api/router.py`, delete `price_agent.py`.
 
 ---
 
 ## Task 13: Historic Import with Classification
 
+Unchanged from original plan. Add `update_unit_taxonomy()` to `historic_repo.py`.
+
+---
+
+## Task 14: Streamlit Skeleton & Theming
+
 **Files:**
-- Modify: `backend/src/db/historic_repo.py`
-- Modify: `backend/src/api/historic.py`
+- Create: `boq_app/app.py`
+- Create: `boq_app/themes.py`
+- Create: `boq_app/styles.py`
+- Create: `.streamlit/config.toml`
 
-**Step 1: Add search_by_taxonomy to historic_repo**
+**Step 1: Create .streamlit config**
 
-Add this function to the end of `backend/src/db/historic_repo.py`:
+Create `.streamlit/config.toml`:
+
+```toml
+[theme]
+primaryColor = "#4a9eff"
+backgroundColor = "#0a0f1e"
+secondaryBackgroundColor = "#141e3c"
+textColor = "#e0e6f0"
+font = "monospace"
+
+[server]
+headless = true
+```
+
+**Step 2: Create themes**
+
+Create `boq_app/themes.py`:
 
 ```python
-async def update_unit_taxonomy(unit_id: int, taxonomy_id: str) -> None:
-    """Set the taxonomy_id for a historic unit."""
-    db = await get_db()
-    await db.execute(
-        "UPDATE historic_units SET taxonomy_id = ? WHERE id = ?",
-        (taxonomy_id, unit_id),
+"""Theme system: CSS custom properties swapped by changing one dict."""
+
+THEMES = {
+    "minority_report": {
+        "--bg-primary": "rgba(10, 15, 30, 0.95)",
+        "--bg-panel": "rgba(20, 30, 60, 0.45)",
+        "--bg-panel-hover": "rgba(30, 45, 80, 0.55)",
+        "--border-panel": "rgba(100, 160, 255, 0.15)",
+        "--border-glow": "rgba(74, 158, 255, 0.3)",
+        "--accent-primary": "#4a9eff",
+        "--accent-secondary": "#ff8c42",
+        "--accent-success": "#22c55e",
+        "--accent-warning": "#f59e0b",
+        "--accent-danger": "#ef4444",
+        "--text-primary": "#e0e6f0",
+        "--text-secondary": "#8899b4",
+        "--text-muted": "#4a5568",
+        "--glass-blur": "20px",
+        "--glass-border": "1px solid rgba(100, 160, 255, 0.15)",
+        "--shadow-panel": "0 8px 32px rgba(0, 0, 0, 0.3)",
+        "--shadow-glow": "0 0 20px rgba(74, 158, 255, 0.1)",
+        "--radius": "12px",
+        "--font-mono": "'JetBrains Mono', 'Fira Code', monospace",
+        "--agent-classifier": "#4a9eff",
+        "--agent-comparator": "#ff8c42",
+        "--agent-pricer": "#22c55e",
+    },
+    "blueprint": {
+        "--bg-primary": "rgba(0, 20, 60, 0.95)",
+        "--bg-panel": "rgba(10, 40, 90, 0.5)",
+        "--bg-panel-hover": "rgba(20, 55, 110, 0.6)",
+        "--border-panel": "rgba(200, 220, 255, 0.2)",
+        "--border-glow": "rgba(200, 220, 255, 0.4)",
+        "--accent-primary": "#b0c4ff",
+        "--accent-secondary": "#ffd700",
+        "--accent-success": "#66ff66",
+        "--accent-warning": "#ffcc00",
+        "--accent-danger": "#ff6666",
+        "--text-primary": "#d0e0ff",
+        "--text-secondary": "#8090b0",
+        "--text-muted": "#405070",
+        "--glass-blur": "15px",
+        "--glass-border": "1px solid rgba(200, 220, 255, 0.2)",
+        "--shadow-panel": "0 4px 20px rgba(0, 0, 0, 0.4)",
+        "--shadow-glow": "0 0 15px rgba(200, 220, 255, 0.1)",
+        "--radius": "8px",
+        "--font-mono": "'Courier New', monospace",
+        "--agent-classifier": "#b0c4ff",
+        "--agent-comparator": "#ffd700",
+        "--agent-pricer": "#66ff66",
+    },
+    "construction_site": {
+        "--bg-primary": "rgba(30, 20, 10, 0.95)",
+        "--bg-panel": "rgba(60, 40, 20, 0.5)",
+        "--bg-panel-hover": "rgba(80, 55, 30, 0.6)",
+        "--border-panel": "rgba(255, 160, 60, 0.2)",
+        "--border-glow": "rgba(255, 140, 40, 0.3)",
+        "--accent-primary": "#ff8c28",
+        "--accent-secondary": "#ffd700",
+        "--accent-success": "#4ade80",
+        "--accent-warning": "#fbbf24",
+        "--accent-danger": "#f87171",
+        "--text-primary": "#f0e6d0",
+        "--text-secondary": "#b4a088",
+        "--text-muted": "#6b5a48",
+        "--glass-blur": "12px",
+        "--glass-border": "1px solid rgba(255, 160, 60, 0.2)",
+        "--shadow-panel": "0 6px 24px rgba(0, 0, 0, 0.4)",
+        "--shadow-glow": "0 0 15px rgba(255, 140, 40, 0.1)",
+        "--radius": "8px",
+        "--font-mono": "'JetBrains Mono', monospace",
+        "--agent-classifier": "#ff8c28",
+        "--agent-comparator": "#ffd700",
+        "--agent-pricer": "#4ade80",
+    },
+}
+
+DEFAULT_THEME = "minority_report"
+```
+
+**Step 3: Create styles**
+
+Create `boq_app/styles.py`:
+
+```python
+"""All CSS: glassmorphism base, component styles, Streamlit overrides."""
+
+
+def build_css(theme_vars: dict[str, str]) -> str:
+    """Build complete CSS string from theme variables."""
+    root_vars = "\n".join(f"    {k}: {v};" for k, v in theme_vars.items())
+
+    return f"""
+<style>
+:root {{
+{root_vars}
+}}
+
+/* --- Base: hide Streamlit chrome --- */
+#MainMenu, footer, header {{visibility: hidden;}}
+.stDeployButton {{display: none;}}
+
+/* --- Glassmorphism panels --- */
+[data-testid="stVerticalBlock"] > div > div[data-testid="stVerticalBlockBorderWrapper"] {{
+    background: var(--bg-panel) !important;
+    backdrop-filter: blur(var(--glass-blur)) !important;
+    -webkit-backdrop-filter: blur(var(--glass-blur)) !important;
+    border: var(--glass-border) !important;
+    border-radius: var(--radius) !important;
+    box-shadow: var(--shadow-panel) !important;
+    border-top: 2px solid var(--border-glow) !important;
+}}
+
+/* --- Global background --- */
+.stApp {{
+    background: var(--bg-primary) !important;
+}}
+
+/* --- Pipeline bar dots --- */
+.pipeline-dot {{
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+    margin: 0 4px;
+    background: var(--text-muted);
+    transition: all 0.3s ease;
+}}
+.pipeline-dot.active {{
+    background: var(--accent-primary);
+    box-shadow: 0 0 10px var(--accent-primary);
+    animation: pulse 1.5s infinite;
+}}
+.pipeline-dot.done {{
+    background: var(--accent-success);
+}}
+
+@keyframes pulse {{
+    0%, 100% {{ opacity: 1; }}
+    50% {{ opacity: 0.5; }}
+}}
+
+/* --- Agent badges --- */
+.agent-badge {{
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: bold;
+    font-family: var(--font-mono);
+}}
+.agent-badge.classifier {{ background: var(--agent-classifier); color: #000; }}
+.agent-badge.comparator {{ background: var(--agent-comparator); color: #000; }}
+.agent-badge.pricer {{ background: var(--agent-pricer); color: #000; }}
+
+/* --- Confidence bars --- */
+.confidence-bar {{
+    height: 8px;
+    border-radius: 4px;
+    background: var(--text-muted);
+    overflow: hidden;
+    margin: 4px 0;
+}}
+.confidence-bar-fill {{
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.5s ease;
+}}
+
+/* --- Navigation tree --- */
+.nav-item {{
+    padding: 6px 12px;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+}}
+.nav-item:hover {{
+    background: var(--bg-panel-hover);
+}}
+.nav-item.active {{
+    border-left-color: var(--accent-primary);
+    background: var(--bg-panel-hover);
+    box-shadow: var(--shadow-glow);
+}}
+.nav-item.matched {{ border-left-color: var(--accent-success); }}
+.nav-item.pending {{ border-left-color: var(--text-muted); }}
+
+/* --- Streamlit widget overrides --- */
+.stButton > button {{
+    background: var(--bg-panel) !important;
+    border: var(--glass-border) !important;
+    color: var(--text-primary) !important;
+    border-radius: var(--radius) !important;
+}}
+.stButton > button:hover {{
+    background: var(--bg-panel-hover) !important;
+    box-shadow: var(--shadow-glow) !important;
+}}
+
+/* --- Match cards --- */
+.match-card {{
+    background: var(--bg-panel);
+    border: var(--glass-border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin: 8px 0;
+    transition: all 0.2s;
+}}
+.match-card:hover {{
+    border-color: var(--accent-primary);
+    box-shadow: var(--shadow-glow);
+}}
+</style>
+"""
+```
+
+**Step 4: Create app skeleton**
+
+Create `boq_app/app.py`:
+
+```python
+"""Main Streamlit entry point: 3-column glassmorphism layout."""
+
+import streamlit as st
+
+from themes import THEMES, DEFAULT_THEME
+from styles import build_css
+
+# --- Page config ---
+st.set_page_config(
+    page_title="Troškovnjik BoQ Matcher",
+    page_icon="🏗️",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# --- Session state init ---
+if "theme" not in st.session_state:
+    st.session_state.theme = DEFAULT_THEME
+if "app_state" not in st.session_state:
+    st.session_state.app_state = {
+        "pipeline_stage": "upload",
+        "selected_unit_idx": 0,
+        "parsed_boq": None,
+        "reasoning_log": [],
+        "matches": [],
+        "suggestions": {},
+        "stats": {},
+    }
+
+# --- Inject CSS ---
+theme_vars = THEMES[st.session_state.theme]
+st.markdown(build_css(theme_vars), unsafe_allow_html=True)
+
+# --- Header ---
+header_cols = st.columns([3, 6, 2, 1])
+with header_cols[0]:
+    st.markdown("### 🏗️ Troškovnjik")
+with header_cols[1]:
+    # Pipeline bar placeholder
+    st.caption("Upload → Parse → Index → Match → Suggest → Review")
+with header_cols[2]:
+    st.selectbox(
+        "Theme",
+        list(THEMES.keys()),
+        key="theme",
+        label_visibility="collapsed",
     )
-    await db.commit()
+with header_cols[3]:
+    st.file_uploader("📁", type=["xlsx"], key="upload", label_visibility="collapsed")
+
+# --- 3-column layout ---
+left, center, right = st.columns([1, 2, 1])
+
+with left:
+    with st.container(border=True):
+        st.markdown("#### BoQ Navigator")
+        st.caption("Upload a file to begin")
+
+with center:
+    with st.container(border=True):
+        st.markdown("#### Item Detail")
+        st.caption("Select an item from the navigator")
+    with st.container(border=True):
+        st.markdown("#### Match Results")
+        st.caption("Matches will appear here")
+
+with right:
+    with st.container(border=True):
+        st.markdown("#### LLM Reasoning")
+        st.caption("Agent activity will appear here")
+    with st.container(border=True):
+        st.markdown("#### Confidence Breakdown")
+        st.caption("Match scoring factors")
+
+# --- Stats footer ---
+f1, f2, f3, f4 = st.columns(4)
+f1.metric("AVG", "—")
+f2.metric("MIN", "—")
+f3.metric("MAX", "—")
+f4.metric("MATCHES", "—")
 ```
 
-**Step 2: Update historic import endpoint**
+**Step 5: Verify Streamlit loads**
 
-In `backend/src/api/historic.py`, update the import endpoint to optionally classify units during import. Add after the existing import:
+Run: `uv run streamlit run boq_app/app.py`
+Expected: App loads in browser with glassmorphism panels, 3 columns, theme switcher
 
-```python
-from fastapi import APIRouter, UploadFile, File, Query
-
-from ..models.historic import HistoricMatch
-from ..db.historic_repo import search_historic, import_boq_to_historic
-from ..parser.excel_parser import parse_excel
-
-router = APIRouter()
-
-
-@router.get("/historic/search", response_model=list[HistoricMatch])
-async def search_historic_units(q: str = Query(..., min_length=2), limit: int = 10):
-    return await search_historic(q, limit)
-
-
-@router.post("/historic/import")
-async def import_historic(file: UploadFile = File(...)):
-    content = await file.read()
-    boq = parse_excel(content, file.filename or "unknown.xlsx")
-    count = await import_boq_to_historic(boq, file.filename or "unknown.xlsx")
-    return {"imported_count": count, "unit_count": len(boq.units)}
-```
-
-**Note:** Classification during import is a separate async operation that will be triggered by the user via the UI (selecting a unit → running the classifier). This keeps the import fast and lets the user review classifications. A batch classification endpoint can be added later.
-
-**Step 3: Commit**
+**Step 6: Commit**
 
 ```bash
-git add backend/src/db/historic_repo.py backend/src/api/historic.py
-git commit -m "feat: add update_unit_taxonomy for historic import classification"
+git add boq_app/ .streamlit/
+git commit -m "feat: add Streamlit skeleton with glassmorphism theming (3 themes)"
 ```
 
 ---
 
-## Task 14: Run All Tests
+## Task 15: Streamlit Data Models & Mock Data
+
+**Files:**
+- Create: `boq_app/models.py`
+- Create: `boq_app/mock_data.py`
+- Create: `boq_app/state.py`
+
+**Step 1: Create UI models**
+
+Create `boq_app/models.py`:
+
+```python
+"""UI-side Pydantic models — thin wrappers around backend models.
+
+These map directly to backend models from backend/src/models/ and
+backend/src/agent/schemas.py. Import paths are kept separate so the
+Streamlit app can run standalone with mock data.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, Field, computed_field
+
+
+# Mirrors backend LogicalUnit
+class BoQItemUI(BaseModel):
+    id: str
+    item_number: str
+    title: str
+    description: str = ""
+    priced_lines: list[PricedLineUI] = []
+    parent_section: str = ""
+    parent_chapter: str = ""
+    level: int = 0  # 0=chapter, 1=section, 2=subsection, 3=work_item
+    status: str = "pending"  # "pending", "matched", "applied"
+
+
+# Mirrors backend PricedLine
+class PricedLineUI(BaseModel):
+    item_number: str
+    description: str = ""
+    unit: str = ""
+    quantity: float = 0.0
+    unit_price: float | None = None
+    total: float | None = None
+    suggested_price: float | None = None
+    suggestion_confidence: float | None = None
+
+
+# Mirrors backend ParsedBoQ
+class ParsedFileUI(BaseModel):
+    filename: str
+    format_detected: str
+    sheet_name: str
+    chapter_title: str = ""
+    items: list[BoQItemUI] = []
+
+
+# Mirrors backend ConfidenceBreakdown
+class ConfidenceBreakdownUI(BaseModel):
+    text_similarity: float = 0.0
+    unit_match: float = 0.0
+    hierarchy_match: float = 0.0
+    description_overlap: float = 0.0
+
+    @computed_field
+    @property
+    def overall(self) -> float:
+        return round(
+            self.text_similarity * 0.4
+            + self.unit_match * 0.25
+            + self.hierarchy_match * 0.2
+            + self.description_overlap * 0.15,
+            4,
+        )
+
+
+# Mirrors backend HistoricComparison
+class HistoricMatchUI(BaseModel):
+    historic_unit_id: int
+    project_name: str
+    source_filename: str = ""
+    project_year: int = 0
+    confidence: ConfidenceBreakdownUI
+    matching_sub_items: list[str] = []
+    missing_sub_items: list[str] = []
+    extra_sub_items: list[str] = []
+    qty_delta_pct: float = 0.0
+    price_lines: list[HistoricMatchLineUI] = []
+
+
+class HistoricMatchLineUI(BaseModel):
+    description: str
+    unit_of_measure: str
+    quantity: float
+    unit_price: float
+
+
+# Mirrors backend ReasoningEntry
+class ReasoningEntryUI(BaseModel):
+    agent: str  # "classifier", "comparator", "pricer"
+    message: str
+    timestamp: str = ""
+
+
+# Fix forward references
+BoQItemUI.model_rebuild()
+```
+
+**Step 2: Create mock data**
+
+Create `boq_app/mock_data.py`:
+
+```python
+"""Realistic Croatian BoQ mock data for development."""
+
+from models import (
+    BoQItemUI,
+    ConfidenceBreakdownUI,
+    HistoricMatchLineUI,
+    HistoricMatchUI,
+    ParsedFileUI,
+    PricedLineUI,
+    ReasoningEntryUI,
+)
+
+MOCK_PARSED_FILE = ParsedFileUI(
+    filename="ES SAVSKA OPATOVINA - Krovopokrivački.xlsx",
+    format_detected="eurospin",
+    sheet_name="Radovi",
+    chapter_title="26. Krovopokrivački - izolacija krova",
+    items=[
+        BoQItemUI(
+            id="unit-1",
+            item_number="3.1.1.",
+            title="Hidroizolacija ravnog krova",
+            description="Izvedba kompletne hidroizolacije ravnog krova uključujući parnu branu, toplinsku izolaciju i završnu hidroizolacijsku membranu.",
+            level=3,
+            status="matched",
+            priced_lines=[
+                PricedLineUI(item_number="3.1.1.a.", description="Parna brana PE folija 0.2mm", unit="m²", quantity=250.0, unit_price=4.50, total=1125.0),
+                PricedLineUI(item_number="3.1.1.b.", description="Toplinska izolacija XPS 5cm", unit="m²", quantity=250.0, unit_price=18.00, total=4500.0),
+                PricedLineUI(item_number="3.1.1.c.", description="Hidroizolacijska membrana PVC 1.5mm", unit="m²", quantity=250.0, unit_price=35.00, total=8750.0),
+            ],
+        ),
+        BoQItemUI(
+            id="unit-2",
+            item_number="3.1.2.",
+            title="Toplinska izolacija fasade",
+            description="Izvedba kontaktne fasade s toplinskom izolacijom EPS 10cm.",
+            level=3,
+            status="pending",
+            priced_lines=[
+                PricedLineUI(item_number="3.1.2.a.", description="EPS ploče 10cm", unit="m²", quantity=180.0, unit_price=12.00, total=2160.0),
+                PricedLineUI(item_number="3.1.2.b.", description="Ljepilo i armirna mrežica", unit="m²", quantity=180.0, unit_price=8.50, total=1530.0),
+            ],
+        ),
+        BoQItemUI(
+            id="unit-3",
+            item_number="3.2.1.",
+            title="Betonski radovi - podloge",
+            description="Izvedba betonskih podloga i stopa beton C40/50.",
+            level=3,
+            status="pending",
+            priced_lines=[
+                PricedLineUI(item_number="3.2.1.a.", description="Beton C40/50", unit="m³", quantity=45.0, unit_price=95.00, total=4275.0),
+                PricedLineUI(item_number="3.2.1.b.", description="Armatura B500B", unit="kg", quantity=3200.0, unit_price=1.20, total=3840.0),
+            ],
+        ),
+    ],
+)
+
+MOCK_MATCHES = [
+    HistoricMatchUI(
+        historic_unit_id=101,
+        project_name="Kaufland Osijek (Retfala)",
+        source_filename="Kaufland Osijek (RETFALA).xlsx",
+        project_year=2025,
+        confidence=ConfidenceBreakdownUI(text_similarity=0.88, unit_match=1.0, hierarchy_match=0.75, description_overlap=0.70),
+        matching_sub_items=["parna brana", "toplinska izolacija", "hidroizolacijska membrana"],
+        missing_sub_items=[],
+        extra_sub_items=[],
+        qty_delta_pct=-8.0,
+        price_lines=[
+            HistoricMatchLineUI(description="Parna brana PE folija", unit_of_measure="m²", quantity=230.0, unit_price=4.20),
+            HistoricMatchLineUI(description="Toplinska izolacija XPS", unit_of_measure="m²", quantity=230.0, unit_price=16.50),
+            HistoricMatchLineUI(description="Hidroizolacijska membrana", unit_of_measure="m²", quantity=230.0, unit_price=32.00),
+        ],
+    ),
+    HistoricMatchUI(
+        historic_unit_id=102,
+        project_name="Eurospin Savska Opatovina",
+        source_filename="Eurospin_SO_Krovopokrivački.xlsx",
+        project_year=2025,
+        confidence=ConfidenceBreakdownUI(text_similarity=0.92, unit_match=1.0, hierarchy_match=0.80, description_overlap=0.85),
+        matching_sub_items=["parna brana", "hidroizolacijska membrana"],
+        missing_sub_items=["toplinska izolacija"],
+        extra_sub_items=["vertikalna uz parapetne zidove"],
+        qty_delta_pct=12.5,
+        price_lines=[
+            HistoricMatchLineUI(description="Parna brana", unit_of_measure="m²", quantity=280.0, unit_price=5.00),
+            HistoricMatchLineUI(description="Hidroizolacijska membrana PVC", unit_of_measure="m²", quantity=280.0, unit_price=38.00),
+        ],
+    ),
+]
+
+MOCK_REASONING = [
+    ReasoningEntryUI(agent="classifier", message="Klasificiram stavku: Hidroizolacija ravnog krova", timestamp="2026-02-14T10:00:01Z"),
+    ReasoningEntryUI(agent="classifier", message="Pronađen tip: hidroizolacija-ravnog-krova (confidence: 0.85)", timestamp="2026-02-14T10:00:02Z"),
+    ReasoningEntryUI(agent="comparator", message="Tražim historijske stavke za tip: hidroizolacija-ravnog-krova", timestamp="2026-02-14T10:00:03Z"),
+    ReasoningEntryUI(agent="comparator", message="Pronađeno 2 historijskih podudaranja", timestamp="2026-02-14T10:00:04Z"),
+    ReasoningEntryUI(agent="comparator", message="  Kaufland Osijek (2025): sličnost 84%, qty Δ -8.0%", timestamp="2026-02-14T10:00:04Z"),
+    ReasoningEntryUI(agent="comparator", message="  Eurospin SO (2025): sličnost 90%, qty Δ +12.5%", timestamp="2026-02-14T10:00:05Z"),
+    ReasoningEntryUI(agent="pricer", message="Analiziram cijene na temelju historijskih podataka", timestamp="2026-02-14T10:00:06Z"),
+    ReasoningEntryUI(agent="pricer", message="  3.1.1.a.: 4.60 EUR (confidence: 80%)", timestamp="2026-02-14T10:00:07Z"),
+    ReasoningEntryUI(agent="pricer", message="  3.1.1.b.: 16.50 EUR (confidence: 70%)", timestamp="2026-02-14T10:00:07Z"),
+    ReasoningEntryUI(agent="pricer", message="  3.1.1.c.: 35.00 EUR (confidence: 85%)", timestamp="2026-02-14T10:00:08Z"),
+]
+```
+
+**Step 3: Create state manager**
+
+Create `boq_app/state.py`:
+
+```python
+"""Session state initialization and helpers."""
+
+import streamlit as st
+from themes import DEFAULT_THEME
+
+
+def init_state():
+    """Initialize all session state keys if not present."""
+    defaults = {
+        "theme": DEFAULT_THEME,
+        "pipeline_stage": "upload",
+        "selected_unit_idx": 0,
+        "parsed_file": None,
+        "reasoning_log": [],
+        "matches": [],
+        "suggestions": {},
+        "stats": {"avg": 0, "min": 0, "max": 0, "matches": 0},
+        "expanded_cards": set(),
+    }
+    for key, default in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = default
+
+
+def get_state(key: str):
+    return st.session_state.get(key)
+
+
+def set_state(key: str, value):
+    st.session_state[key] = value
+```
+
+**Step 4: Verify imports**
+
+Run: `uv run python -c "from boq_app.models import BoQItemUI; print('OK')"`
+Expected: `OK`
+
+**Step 5: Commit**
+
+```bash
+git add boq_app/models.py boq_app/mock_data.py boq_app/state.py
+git commit -m "feat: add Streamlit UI models, mock data, and state management"
+```
+
+---
+
+## Task 16: Streamlit Components
+
+**Files:**
+- Create: `boq_app/components/__init__.py`
+- Create: `boq_app/components/header.py`
+- Create: `boq_app/components/navigator.py`
+- Create: `boq_app/components/item_detail.py`
+- Create: `boq_app/components/match_cards.py`
+- Create: `boq_app/components/reasoning_panel.py`
+- Create: `boq_app/components/confidence_panel.py`
+- Create: `boq_app/components/stats_footer.py`
+
+Each component is a function that renders into its panel. Components use `st.markdown(unsafe_allow_html=True)` for glassmorphism styling and CSS classes defined in `styles.py`.
+
+This is a large task — implement one component at a time, verify it renders, then move to the next. See the Streamlit UI design doc for exact component specifications.
+
+Key patterns:
+- `navigator.py`: `st.radio()` with CSS tree transform, indented by level, colored left border by status
+- `item_detail.py`: glass card with item# badge, title, `st.dataframe()` for priced lines
+- `match_cards.py`: loop over matches, confidence gradient bar, QTY delta badge, APPLY button, expandable details
+- `reasoning_panel.py`: reversed log, monospace, agent badge (CSS class per agent), timestamp
+- `confidence_panel.py`: horizontal bars per scoring factor with `st.markdown()` div fills
+- `header.py`: pipeline dots with active/done CSS classes
+- `stats_footer.py`: `st.metric()` in 4 columns
+
+**Step 1: Create components/__init__.py** (empty file)
+
+**Step 2: Implement all 7 components**
+
+Follow the specifications in the Streamlit UI design doc. Each component takes data from `st.session_state` and renders its panel.
+
+**Step 3: Update app.py to use components**
+
+Replace the placeholder panels in `boq_app/app.py` with component function calls.
+
+**Step 4: Verify all panels render with mock data**
+
+Run: `uv run streamlit run boq_app/app.py`
+Expected: All 7 panels render with mock data, glassmorphism styling applied
+
+**Step 5: Commit**
+
+```bash
+git add boq_app/components/ boq_app/app.py
+git commit -m "feat: add all 7 Streamlit UI components with glassmorphism"
+```
+
+---
+
+## Task 17: Streamlit Interactivity
+
+**Files:**
+- Modify: `boq_app/app.py`
+- Modify: `boq_app/components/navigator.py`
+- Modify: `boq_app/components/match_cards.py`
+
+**Step 1: Wire navigator selection**
+
+Clicking a navigator item updates `selected_unit_idx` in session state. The detail card and match panels re-render for the selected unit. Use `st.radio()` `on_change` or `st.fragment()` for independent panel reruns.
+
+**Step 2: Wire APPLY button**
+
+Each match card has an APPLY button. Clicking it copies the historic prices to the selected unit's priced lines in session state. The output panel shows the applied prices.
+
+**Step 3: Wire file upload**
+
+`st.file_uploader` on change populates session state with parsed data (mock data initially, real parsing later). Pipeline stage advances from "upload" to "parse".
+
+**Step 4: Wire MORE/DETAILS expansion**
+
+Each match card has a toggle that expands to show the full historic priced lines table. Uses `expanded_cards` set in session state.
+
+**Step 5: Use st.fragment() for independent panels**
+
+Left navigator, center detail, and right reasoning panels re-run independently using `st.fragment()` to avoid full page reruns.
+
+**Step 6: Verify interactivity**
+
+Run: `uv run streamlit run boq_app/app.py`
+Expected: Click navigator → detail updates. Click APPLY → prices copy. Upload file → data loads.
+
+**Step 7: Commit**
+
+```bash
+git add boq_app/
+git commit -m "feat: wire Streamlit interactivity (navigator, APPLY, upload, expand)"
+```
+
+---
+
+## Task 18: Backend Integration
+
+**Files:**
+- Create: `boq_app/backend.py`
+- Modify: `boq_app/app.py`
+
+**Step 1: Create backend integration module**
+
+Create `boq_app/backend.py`:
+
+```python
+"""Backend integration: mock data stubs → real FastAPI.
+
+Phase 1: Returns mock data for standalone development.
+Phase 2: Calls FastAPI endpoints via httpx.
+
+Toggle via USE_REAL_BACKEND flag or environment variable.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from typing import AsyncGenerator
+
+import httpx
+
+from models import ParsedFileUI, HistoricMatchUI, ReasoningEntryUI
+from mock_data import MOCK_PARSED_FILE, MOCK_MATCHES, MOCK_REASONING
+
+USE_REAL_BACKEND = os.getenv("BOQ_REAL_BACKEND", "false").lower() == "true"
+BACKEND_URL = os.getenv("BOQ_BACKEND_URL", "http://localhost:8081/api")
+
+
+async def parse_uploaded_file(content: bytes, filename: str) -> ParsedFileUI:
+    """Parse an uploaded Excel file into structured BoQ data."""
+    if not USE_REAL_BACKEND:
+        return MOCK_PARSED_FILE
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{BACKEND_URL}/upload",
+            files={"file": (filename, content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        resp.raise_for_status()
+        return ParsedFileUI(**resp.json())
+
+
+async def search_historic_matches(unit_id: str) -> list[HistoricMatchUI]:
+    """Search for historic matches for a given unit."""
+    if not USE_REAL_BACKEND:
+        return MOCK_MATCHES
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{BACKEND_URL}/historic/search", params={"q": unit_id})
+        resp.raise_for_status()
+        return [HistoricMatchUI(**m) for m in resp.json()]
+
+
+async def run_suggestions(unit_id: str) -> AsyncGenerator[tuple[str, dict], None]:
+    """Stream SSE events from the agent pipeline.
+
+    Yields (event_type, data) tuples matching the backend pipeline format.
+    """
+    if not USE_REAL_BACKEND:
+        # Mock: yield pre-built reasoning entries with delays
+        import time
+        for entry in MOCK_REASONING:
+            yield ("reasoning", entry.model_dump())
+            await asyncio.sleep(0.1)
+        yield ("complete", {})
+        return
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        async with client.stream(
+            "POST",
+            f"{BACKEND_URL}/agent/suggest",
+            json={"unit_id": unit_id},
+        ) as resp:
+            event_type = ""
+            async for line in resp.aiter_lines():
+                if line.startswith("event:"):
+                    event_type = line[6:].strip()
+                elif line.startswith("data:"):
+                    import json
+                    data = json.loads(line[5:].strip())
+                    yield (event_type, data)
+```
+
+**Step 2: Wire into app.py**
+
+Update `boq_app/app.py` to call `backend.py` functions:
+- File upload → `asyncio.run(parse_uploaded_file(content, filename))`
+- Unit selection → `asyncio.run(search_historic_matches(unit_id))`
+- "Run Analysis" button → stream `run_suggestions()` via `st.empty()` live updates
+
+**Step 3: Test with mock data**
+
+Run: `uv run streamlit run boq_app/app.py`
+Expected: Upload triggers mock parsing, analysis streams mock reasoning entries
+
+**Step 4: Test with real backend**
+
+Run: `BOQ_REAL_BACKEND=true uv run streamlit run boq_app/app.py`
+Prerequisites: FastAPI backend running on :8081, llama-server on :8080
+Expected: Real Excel parsing, real LLM pipeline, real SSE streaming
+
+**Step 5: Commit**
+
+```bash
+git add boq_app/backend.py boq_app/app.py
+git commit -m "feat: add backend integration with mock/real toggle"
+```
+
+---
+
+## Task 19: Polish — Themes & Testing
+
+**Files:**
+- Modify: `boq_app/app.py`
+- Modify: `boq_app/themes.py`
+
+**Step 1: Verify all 3 themes work**
+
+Switch themes via the header selectbox. Verify:
+- Minority Report: blue/cyan glass on dark navy
+- Blueprint: white on deep blue
+- Construction Site: warm amber/orange
+
+**Step 2: Test with all 30 xlsx files**
+
+Upload each file from `vanjski-podaci/primjeri-excel-ponuda/` and verify:
+- File parses without errors
+- Navigator populates with items
+- Encoding handles Croatian characters (č, ć, š, ž, đ)
+
+**Step 3: backdrop-filter fallback**
+
+Test in browser. If `backdrop-filter: blur()` doesn't render, add fallback in `styles.py`:
+
+```css
+@supports not (backdrop-filter: blur(20px)) {
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        background: rgba(20, 30, 60, 0.85) !important;
+    }
+}
+```
+
+**Step 4: Commit**
+
+```bash
+git add boq_app/
+git commit -m "polish: verify themes, test with all 30 xlsx files, add blur fallback"
+```
+
+---
+
+## Task 20: Run All Backend Tests
 
 **Step 1: Run full test suite**
 
 Run: `cd backend && uv run pytest tests/ -v`
-Expected: All tests pass (approximately 22 tests)
+Expected: All tests pass (~24 tests)
 
-**Step 2: Fix any failures**
-
-If any test fails, fix the issue and re-run.
-
-**Step 3: Final commit if any fixes were needed**
-
-```bash
-git add -A
-git commit -m "fix: address test failures from integration"
-```
+**Step 2: Fix any failures and commit**
 
 ---
 
-## Task 15: Smoke Test with Live LLM
+## Task 21: End-to-End Smoke Test
 
 **Prerequisites:** llama-server running at `http://localhost:8080/v1`
 
-**Step 1: Start the backend**
+**Step 1: Start backend**
 
 Run: `cd backend && uv run uvicorn src.main:app --host 127.0.0.1 --port 8081 --reload`
-Expected: Server starts on port 8081
 
-**Step 2: Seed a taxonomy entry**
+**Step 2: Seed taxonomy**
 
-Run:
 ```bash
 curl -X POST http://localhost:8081/api/taxonomy/seed \
   -H "Content-Type: application/json" \
@@ -2294,12 +1854,18 @@ curl -X POST http://localhost:8081/api/taxonomy/seed \
     ]
   }'
 ```
-Expected: `{"seeded_count": 1}`
 
-**Step 3: Upload an Excel file and trigger the pipeline**
+**Step 3: Start Streamlit with real backend**
 
-Use the frontend or curl to upload one of the test Excel files and call the suggest endpoint. Verify that SSE events stream back with classification, historic matches, and price suggestions.
+Run: `BOQ_REAL_BACKEND=true uv run streamlit run boq_app/app.py`
 
-**Step 4: Commit smoke test results**
+**Step 4: Verify end-to-end flow**
 
-No code changes — just verify the pipeline works end-to-end.
+1. Upload an xlsx from `vanjski-podaci/`
+2. Navigator populates
+3. Click a unit → detail card shows
+4. Click "Run Analysis" → reasoning panel streams live
+5. Match cards appear with confidence bars and QTY deltas
+6. APPLY button copies prices
+7. Stats footer shows AVG/MIN/MAX/MATCHES
+8. Theme switcher changes palette
