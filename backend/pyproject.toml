@@ -1,0 +1,23 @@
+[project]
+name = "troskovljnjikov-backend"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]",
+    "pydantic>=2.0",
+    "pydantic-ai",
+    "openpyxl",
+    "aiosqlite",
+    "python-multipart",
+    "openai",
+    "httpx",
+    "sse-starlette",
+    "logfire",
+]
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
