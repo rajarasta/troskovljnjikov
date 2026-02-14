@@ -7,7 +7,7 @@ set -e
 
 # 1. Start the LLM Server in background
 echo "Starting llama-server..."
-./bin/llama-server -m ./models/llama3.gguf --parallel 4 --cont-batching --cache-reuse 512 &
+LD_LIBRARY_PATH=./bin:$LD_LIBRARY_PATH ./bin/llama-server -m ./models/llama3.gguf -ngl 99 --parallel 4 --cont-batching --cache-reuse 512 --chat-template chatml &
 SERVER_PID=$!
 
 # Give the server a moment to start

@@ -1,92 +1,223 @@
+import logfire
 import streamlit as st
 import asyncio
-import pandas as pd
 from dataclasses import dataclass, field
-from typing import List, Optional
-from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
+logfire.configure()
+logfire.instrument_pydantic_ai()
+
 # --- 1. STATE MANAGEMENT ---
-if 'ui_state' not in st.session_state:
+if "ui_state" not in st.session_state:
     st.session_state.ui_state = {
-        "summary": "No analysis performed yet.",
+        "phase": "idle",
         "logs": [],
-        "anchors": {"second": "?", "penultimate": "?"}
+        "anchors": {"second": "?", "penultimate": "?"},
+        "comparisons": {"5th_vs_2nd": "?", "10th_vs_penultimate": "?"},
+        "guessed_so_far": "",
+        "total_guesses": 0,
+        "correct_guesses": 0,
+        "reconstructed": "",
     }
+
 
 def add_log(msg: str):
     st.session_state.ui_state["logs"].append(msg)
 
-# --- 2. SCHEMAS & MODELS ---
-class ConfirmationVerdict(BaseModel):
-    approved: bool = Field(description="True if the logic is sound")
-    reason: str = Field(description="Explanation of the verdict")
 
-# Connect to local llama-server
-provider = OpenAIProvider(base_url='http://localhost:8080/v1')
-model = OpenAIChatModel(model_name='llama3', provider=provider)
+# --- 2. GAME STATE & MODEL ---
+@dataclass
+class GameState:
+    text: str
+    current_pos: int = 0
+    anchor_2nd: str = ""
+    anchor_penultimate: str = ""
+    cmp_5th_vs_2nd: str = ""
+    cmp_10th_vs_penultimate: str = ""
+    guessed_so_far: list = field(default_factory=list)
+    wrong_guesses: list = field(default_factory=list)
+    total_guesses: int = 0
 
-# --- 3. AGENTS ---
-# Main Agent (The Orchestrator)
-orchestrator = Agent(model, deps_type=str)
 
-# Confirmation Agent (Transient Specialist)
-confirm_agent = Agent(model, output_type=ConfirmationVerdict)
+provider = OpenAIProvider(base_url="http://localhost:8080/v1")
+model = OpenAIChatModel(model_name="llama3", provider=provider)
 
-# --- 4. TOOLS ---
-@orchestrator.tool
-def get_anchor_letters(ctx: RunContext[str]) -> dict:
-    """Extracts 2nd and 2nd-to-last letters."""
-    text = ctx.deps
-    res = {"second": text[1], "penultimate": text[-2]}
-    st.session_state.ui_state["anchors"] = res
-    return res
 
-@orchestrator.tool
-async def verify_logic(ctx: RunContext[str], proposal: str) -> str:
-    """Summons a Confirmation Agent to double-check the Orchestrator's plan."""
-    add_log(f"Summoning Confirmation Agent for: {proposal}")
+# --- 3. PHASE 1: DETERMINISTIC AGENTS ---
+def anchor_agent(text: str) -> dict:
+    result = {"second": text[1] if len(text) > 1 else "?",
+              "penultimate": text[-2] if len(text) > 1 else "?"}
+    st.session_state.ui_state["anchors"] = result
+    add_log(f"Anchor Agent: 2nd='{result['second']}', penultimate='{result['penultimate']}'")
+    return result
 
-    # This agent runs and then 'unspawns' when the function returns
-    verdict = await confirm_agent.run(f"Verify this proposal: {proposal}")
 
-    status = "APPROVED" if verdict.output.approved else "REJECTED"
-    add_log(f"Verdict: {status} - {verdict.output.reason}")
+def compare_agent_a(text: str, anchor_2nd: str) -> str:
+    if len(text) < 5:
+        return "N/A"
+    fifth = text[4]
+    result = "same" if fifth == anchor_2nd else "different"
+    add_log(f"Compare Agent A: 5th letter '{fifth}' is {result} as 2nd '{anchor_2nd}'")
+    return result
 
-    # Update global summary state
-    st.session_state.ui_state["summary"] = f"Last Check: {status}. {verdict.output.reason}"
-    return status
 
-# --- 5. UI LAYOUT ---
-st.set_page_config(page_title="Company Doc AI", layout="wide")
-st.title("Agentic Document Editor")
+def compare_agent_b(text: str, anchor_penultimate: str) -> str:
+    if len(text) < 10:
+        return "N/A"
+    tenth = text[9]
+    result = "same" if tenth == anchor_penultimate else "different"
+    add_log(f"Compare Agent B: 10th letter '{tenth}' is {result} as penultimate '{anchor_penultimate}'")
+    return result
+
+
+def retrieval_agent(text: str, position: int) -> str:
+    return text[position]
+
+
+# --- 4. GUESSER AGENT (LLM) ---
+guesser_agent = Agent(
+    model,
+    output_type=str,
+    deps_type=GameState,
+    system_prompt=(
+        "You are playing a letter guessing game. "
+        "You will be told clues about a hidden text and your progress so far. "
+        "You must guess one letter at a time. "
+        "Reply with ONLY a single character. Nothing else."
+    ),
+    retries=2,
+)
+
+
+@guesser_agent.instructions
+def build_game_context(ctx: RunContext[GameState]) -> str:
+    gs = ctx.deps
+    display = "".join(gs.guessed_so_far) + "_" * (len(gs.text) - len(gs.guessed_so_far))
+    lines = [
+        f"Text length: {len(gs.text)} characters.",
+        f"2nd letter: '{gs.anchor_2nd}'.",
+        f"2nd-to-last letter: '{gs.anchor_penultimate}'.",
+        f"5th letter compared to 2nd: {gs.cmp_5th_vs_2nd}.",
+        f"10th letter compared to 2nd-to-last: {gs.cmp_10th_vs_penultimate}.",
+        f"Progress so far: {display}",
+        f"Guessing position: {gs.current_pos + 1} of {len(gs.text)}.",
+    ]
+    if gs.wrong_guesses:
+        lines.append(f"Wrong guesses for this position: {', '.join(gs.wrong_guesses)}. Do NOT guess these.")
+    return "\n".join(lines)
+
+
+# --- 5. GAME LOOP ---
+MAX_WRONG = 5
+
+
+async def run_game(text: str, progress_bar, status_text):
+    st.session_state.ui_state["phase"] = "phase1"
+    add_log("--- Phase 1: Analyzing text structure ---")
+
+    anchors = anchor_agent(text)
+    cmp_a = compare_agent_a(text, anchors["second"])
+    cmp_b = compare_agent_b(text, anchors["penultimate"])
+    st.session_state.ui_state["comparisons"] = {
+        "5th_vs_2nd": cmp_a, "10th_vs_penultimate": cmp_b
+    }
+
+    st.session_state.ui_state["phase"] = "phase2"
+    add_log("--- Phase 2: Letter guessing ---")
+
+    gs = GameState(
+        text=text,
+        anchor_2nd=anchors["second"],
+        anchor_penultimate=anchors["penultimate"],
+        cmp_5th_vs_2nd=cmp_a,
+        cmp_10th_vs_penultimate=cmp_b,
+    )
+
+    correct_count = 0
+
+    for pos in range(len(text)):
+        gs.current_pos = pos
+        gs.wrong_guesses = []
+
+        while True:
+            gs.total_guesses += 1
+            result = await guesser_agent.run(f"What is letter {pos + 1}?", deps=gs)
+            guessed = result.output.strip()
+            guessed = guessed[0] if guessed else "?"
+
+            actual = retrieval_agent(text, pos)
+
+            if guessed == actual:
+                gs.guessed_so_far.append(actual)
+                correct_count += 1
+                add_log(f"Pos {pos + 1}: '{guessed}' CORRECT")
+                break
+            else:
+                gs.wrong_guesses.append(guessed)
+                add_log(f"Pos {pos + 1}: '{guessed}' WRONG (actual='{actual}')")
+                if len(gs.wrong_guesses) >= MAX_WRONG:
+                    gs.guessed_so_far.append(actual)
+                    add_log(f"Pos {pos + 1}: Revealed '{actual}'")
+                    break
+
+        pct = (pos + 1) / len(text)
+        progress_bar.progress(pct, text=f"Position {pos + 1} of {len(text)}")
+        display = "".join(gs.guessed_so_far) + "_" * (len(text) - len(gs.guessed_so_far))
+        status_text.code(display)
+
+    reconstructed = "".join(gs.guessed_so_far)
+    st.session_state.ui_state["phase"] = "done"
+    st.session_state.ui_state["reconstructed"] = reconstructed
+    st.session_state.ui_state["total_guesses"] = gs.total_guesses
+    st.session_state.ui_state["correct_guesses"] = correct_count
+    add_log(f"DONE! Reconstructed: '{reconstructed}'")
+    return reconstructed
+
+
+# --- 6. UI ---
+st.set_page_config(page_title="Letter Guessing Game", layout="wide")
+st.title("Multi-Agent Letter Guessing Game")
 
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    uploaded_file = st.file_uploader("Upload Document", type=['txt', 'xlsx'])
+    uploaded_file = st.file_uploader("Upload a text file", type=["txt"])
+
     if uploaded_file:
-        content = uploaded_file.getvalue().decode("utf-8")
+        raw = uploaded_file.getvalue()
+        for enc in ("utf-8-sig", "utf-8", "utf-16", "cp1252", "latin-1"):
+            try:
+                content = raw.decode(enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
 
-        if st.button("Start Multi-Agent Analysis"):
-            with st.spinner("Agents are thinking..."):
-                add_log("Starting Orchestrator...")
-                # Run the async logic
-                asyncio.run(orchestrator.run(
-                    "Identify the anchor letters and verify if they form a valid pattern.",
-                    deps=content
-                ))
-            st.success("Analysis Complete")
+        st.text(f"Loaded: {len(content)} characters")
 
-    st.subheader("Document Summary")
-    st.info(st.session_state.ui_state["summary"])
+        if st.button("Start Game"):
+            progress_bar = st.progress(0, text="Starting...")
+            status_text = st.empty()
+
+            with st.spinner("Agents are playing..."):
+                asyncio.run(run_game(content, progress_bar, status_text))
+
+            st.success("Game Complete!")
+
+    ui = st.session_state.ui_state
+    if ui["phase"] == "done":
+        st.subheader("Reconstructed Text")
+        st.code(ui["reconstructed"])
+        c1, c2 = st.columns(2)
+        c1.metric("Total Guesses", ui["total_guesses"])
+        c2.metric("Correct First Try", ui["correct_guesses"])
+
+    st.subheader("Phase 1 Analysis")
+    st.json(ui["anchors"])
+    st.json(ui["comparisons"])
 
 with col2:
     st.subheader("Agent Activity Log")
-    for log in reversed(st.session_state.ui_state["logs"]):
+    for log in reversed(st.session_state.ui_state["logs"][-50:]):
         st.caption(log)
-
-    st.subheader("Extracted Anchors")
-    st.json(st.session_state.ui_state["anchors"])
