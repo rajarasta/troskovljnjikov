@@ -8,9 +8,13 @@
 
 **Tech Stack:** PydanticAI, FastAPI, aiosqlite, SQLite FTS5, sse-starlette, httpx, Streamlit, pytest
 
-**Working directory:** `/media/josip-rastocic/DrugiDisk/Programi/troskovljnjikov/.worktrees/boq-editor`
+**Worktree split:**
+- **Backend (Tasks 1-13):** `.worktrees/boq-editor` branch `feature/boq-editor`
+- **Streamlit UI (Tasks 14-21):** `.worktrees/boq-streamlit-ui` branch `feature/boq-streamlit-ui`
 
-**Run commands from:** `backend/` for backend tasks, project root for Streamlit tasks
+**Run commands from:** `backend/` for backend tasks, `boq-streamlit-ui` root for Streamlit tasks
+
+**Model alignment:** Backend schemas adapt to match existing frontend field names (see Task 2).
 
 ---
 
@@ -96,7 +100,18 @@ git commit -m "chore: add pytest infrastructure"
 Create `backend/tests/test_schemas.py`:
 
 ```python
-"""Tests for agent pipeline schemas."""
+"""Tests for agent pipeline schemas.
+
+Field names aligned with Streamlit frontend models in boq_app/models.py:
+  ReasoningEntry.agent_name  (not .agent)
+  HistoricComparison.match_id  (not .historic_unit_id)
+  HistoricComparison.source_file  (not .source_filename)
+  HistoricComparison.year  (not .project_year)
+  HistoricComparison.match_confidence  (float, overall score)
+  HistoricComparison.confidence_breakdown  (ConfidenceBreakdown object)
+  HistoricComparison.matched_lines  (not .price_lines)
+  PipelineStats.num_matches  (not .match_count)
+"""
 
 from src.agent.schemas import (
     ClassResult,
@@ -156,11 +171,12 @@ def test_confidence_breakdown():
 
 def test_historic_comparison_with_breakdown():
     comp = HistoricComparison(
-        historic_unit_id=42,
+        match_id=42,
         project_name="Kaufland Osijek",
-        source_filename="KAUFLAND OSIJEK - ugovorni troškovnik.xlsx",
-        project_year=2025,
-        confidence=ConfidenceBreakdown(
+        source_file="KAUFLAND OSIJEK - ugovorni troškovnik.xlsx",
+        year=2025,
+        match_confidence=0.8425,
+        confidence_breakdown=ConfidenceBreakdown(
             text_similarity=0.88,
             unit_match=1.0,
             hierarchy_match=0.7,
@@ -170,18 +186,21 @@ def test_historic_comparison_with_breakdown():
         missing_sub_items=[],
         extra_sub_items=["armatura"],
         qty_delta_pct=-8.0,
-        price_lines=[
+        matched_lines=[
             HistoricPriceLine(
+                item_number="3.2.1.a.",
                 description="Beton",
                 unit_of_measure="m³",
                 quantity=120.0,
                 unit_price=95.0,
+                total=11400.0,
             )
         ],
     )
-    assert comp.project_year == 2025
+    assert comp.year == 2025
     assert comp.qty_delta_pct == -8.0
-    assert comp.confidence.overall > 0.7
+    assert comp.confidence_breakdown.overall > 0.7
+    assert comp.match_confidence == 0.8425
 
 
 def test_comp_result():
@@ -194,17 +213,18 @@ def test_comp_result():
         classification=classification,
         matches=[
             HistoricComparison(
-                historic_unit_id=42,
+                match_id=42,
                 project_name="Kaufland Osijek",
-                source_filename="k.xlsx",
-                project_year=2025,
-                confidence=ConfidenceBreakdown(
+                source_file="k.xlsx",
+                year=2025,
+                match_confidence=0.84,
+                confidence_breakdown=ConfidenceBreakdown(
                     text_similarity=0.88,
                     unit_match=1.0,
                     hierarchy_match=0.7,
                     description_overlap=0.65,
                 ),
-                price_lines=[
+                matched_lines=[
                     HistoricPriceLine(
                         description="Beton",
                         unit_of_measure="m³",
@@ -239,10 +259,12 @@ def test_price_result():
 
 def test_reasoning_entry():
     entry = ReasoningEntry(
-        agent="classifier",
+        agent_name="classifier",
         message="Pronađen tip: Hidroizolacija ravnog krova (confidence: 0.85)",
+        entry_type="result",
     )
-    assert entry.agent == "classifier"
+    assert entry.agent_name == "classifier"
+    assert entry.entry_type == "result"
     assert entry.timestamp  # auto-generated
 ```
 
@@ -258,6 +280,7 @@ Create `backend/src/agent/schemas.py`:
 ```python
 """Pydantic schemas for the 3-stage agent pipeline.
 
+Field names aligned with Streamlit frontend models (boq_app/models.py).
 These schemas are shared between:
 - Backend pipeline (agent outputs)
 - SSE events (serialized to JSON)
@@ -267,6 +290,7 @@ These schemas are shared between:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -294,11 +318,13 @@ class ConfidenceBreakdown(BaseModel):
 
 
 # --- Shared: Reasoning log entry (consumed by reasoning panel) ---
+# Frontend field: agent_name (not agent), entry_type for styling
 
 class ReasoningEntry(BaseModel):
     """Single entry in the LLM reasoning log."""
-    agent: str  # "classifier", "comparator", "pricer"
+    agent_name: str  # "classifier", "comparator", "pricer", "system"
     message: str
+    entry_type: str = "info"  # "thinking", "result", "error", "info"
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -320,25 +346,32 @@ class ClassResult(BaseModel):
 
 
 # --- Agent 2: Comparator output ---
+# Frontend fields: match_id, source_file, year, match_confidence,
+#   confidence_breakdown, matched_lines (not historic_unit_id etc.)
 
 class HistoricPriceLine(BaseModel):
+    item_number: str = ""
     description: str
     unit_of_measure: str
     quantity: float
     unit_price: float
+    total: Optional[float] = None
 
 
 class HistoricComparison(BaseModel):
-    historic_unit_id: int
+    match_id: int
     project_name: str
-    source_filename: str = ""
-    project_year: int = 0
-    confidence: ConfidenceBreakdown
+    source_file: str = ""
+    year: int = 0
+    match_confidence: float = 0.0  # overall score (float for frontend)
+    confidence_breakdown: ConfidenceBreakdown
     matching_sub_items: list[str] = []
     missing_sub_items: list[str] = []
     extra_sub_items: list[str] = []
-    qty_delta_pct: float = 0.0  # percentage difference in total quantity
-    price_lines: list[HistoricPriceLine] = []
+    qty_delta_pct: float = 0.0
+    matched_lines: list[HistoricPriceLine] = []
+    avg_unit_price: float = 0.0
+    total: float = 0.0
 
 
 class CompResult(BaseModel):
@@ -369,14 +402,16 @@ class PriceResult(BaseModel):
 
 
 # --- Pipeline stats (consumed by stats footer) ---
+# Frontend field: num_matches (not match_count), currency
 
 class PipelineStats(BaseModel):
     """Aggregate stats emitted at pipeline completion."""
     avg_price: float = 0.0
     min_price: float = 0.0
     max_price: float = 0.0
-    match_count: int = 0
+    num_matches: int = 0
     total_suggestions: int = 0
+    currency: str = "EUR"
 ```
 
 **Step 4: Run test to verify it passes**
@@ -683,17 +718,18 @@ async def test_pipeline_yields_correct_event_sequence(sample_unit):
         classification=mock_class_result,
         matches=[
             HistoricComparison(
-                historic_unit_id=1,
+                match_id=1,
                 project_name="Test Project",
-                source_filename="test.xlsx",
-                project_year=2025,
-                confidence=ConfidenceBreakdown(
+                source_file="test.xlsx",
+                year=2025,
+                match_confidence=0.84,
+                confidence_breakdown=ConfidenceBreakdown(
                     text_similarity=0.88,
                     unit_match=1.0,
                     hierarchy_match=0.7,
                     description_overlap=0.65,
                 ),
-                price_lines=[HistoricPriceLine(description="Parna brana", unit_of_measure="m²", quantity=250, unit_price=12.5)],
+                matched_lines=[HistoricPriceLine(description="Parna brana", unit_of_measure="m²", quantity=250, unit_price=12.5)],
             )
         ],
         summary="Found 1 match",
@@ -751,9 +787,9 @@ async def test_pipeline_yields_correct_event_sequence(sample_unit):
         assert event_types.index("historic_match") < event_types.index("suggestion")
         assert event_types.index("suggestion") < event_types.index("complete")
 
-        # Reasoning entries have agent badge
+        # Reasoning entries have agent_name badge (aligned with frontend)
         reasoning_events = [e for e in events if e[0] == "reasoning"]
-        agents_seen = {e[1]["agent"] for e in reasoning_events}
+        agents_seen = {e[1]["agent_name"] for e in reasoning_events}
         assert "classifier" in agents_seen
 ```
 
@@ -798,8 +834,8 @@ def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _reasoning(agent: str, message: str) -> tuple[str, dict[str, Any]]:
-    entry = ReasoningEntry(agent=agent, message=message)
+def _reasoning(agent_name: str, message: str, entry_type: str = "info") -> tuple[str, dict[str, Any]]:
+    entry = ReasoningEntry(agent_name=agent_name, message=message, entry_type=entry_type)
     return ("reasoning", entry.model_dump())
 
 
@@ -880,13 +916,13 @@ async def run_pipeline(unit: LogicalUnit) -> AsyncIterator[tuple[str, dict[str, 
     for match in comparison.matches:
         yield ("historic_match", match.model_dump())
         yield ("confidence_breakdown", {
-            "historic_unit_id": match.historic_unit_id,
+            "match_id": match.match_id,
             "project_name": match.project_name,
-            "breakdown": match.confidence.model_dump(),
+            "breakdown": match.confidence_breakdown.model_dump(),
         })
         yield _reasoning("comparator",
-            f"  {match.project_name} ({match.project_year}): "
-            f"sličnost {match.confidence.overall:.0%}, "
+            f"  {match.project_name} ({match.year}): "
+            f"sličnost {match.confidence_breakdown.overall:.0%}, "
             f"qty Δ {match.qty_delta_pct:+.1f}%")
 
     # --- Stage 3: Pricer (pipeline: suggest) ---
@@ -916,7 +952,7 @@ async def run_pipeline(unit: LogicalUnit) -> AsyncIterator[tuple[str, dict[str, 
         avg_price=sum(all_prices) / len(all_prices) if all_prices else 0,
         min_price=min(all_prices) if all_prices else 0,
         max_price=max(all_prices) if all_prices else 0,
-        match_count=len(comparison.matches),
+        num_matches=len(comparison.matches),
         total_suggestions=len(all_prices),
     )
     yield ("stats", stats.model_dump())
@@ -952,412 +988,81 @@ Unchanged from original plan. Add `update_unit_taxonomy()` to `historic_repo.py`
 
 ---
 
-## Task 14: Streamlit Skeleton & Theming
+## Task 14: Streamlit Skeleton & Theming — DONE (Batch 1)
 
-**Files:**
-- Create: `boq_app/app.py`
-- Create: `boq_app/themes.py`
-- Create: `boq_app/styles.py`
-- Create: `.streamlit/config.toml`
+**Status:** Complete in `.worktrees/boq-streamlit-ui` on branch `feature/boq-streamlit-ui`.
 
-**Step 1: Create .streamlit config**
+**What was built (differs from original plan):**
 
-Create `.streamlit/config.toml`:
+- Layout: **2-column** `[2, 5]` (not 3-column) — left (navigator + carousel), right (unified panel)
+- Default theme: **Light frosted glass** — `rgba(255,255,255,0.55)` on `#eef2f8` (not dark navy)
+- CSS: **~660 lines** in `styles.py` (7 CSS module functions, much richer than planned)
+- Entry point: `boq_ui.py` → imports `boq_app.app` (fixes relative import issue)
+- 3 themes: minority_report (light, default), blueprint (dark blue), construction_site (warm amber)
 
-```toml
-[theme]
-primaryColor = "#4a9eff"
-backgroundColor = "#0a0f1e"
-secondaryBackgroundColor = "#141e3c"
-textColor = "#e0e6f0"
-font = "monospace"
-
-[server]
-headless = true
-```
-
-**Step 2: Create themes**
-
-Create `boq_app/themes.py`:
-
-```python
-"""Theme system: CSS custom properties swapped by changing one dict."""
-
-THEMES = {
-    "minority_report": {
-        "--bg-primary": "rgba(10, 15, 30, 0.95)",
-        "--bg-panel": "rgba(20, 30, 60, 0.45)",
-        "--bg-panel-hover": "rgba(30, 45, 80, 0.55)",
-        "--border-panel": "rgba(100, 160, 255, 0.15)",
-        "--border-glow": "rgba(74, 158, 255, 0.3)",
-        "--accent-primary": "#4a9eff",
-        "--accent-secondary": "#ff8c42",
-        "--accent-success": "#22c55e",
-        "--accent-warning": "#f59e0b",
-        "--accent-danger": "#ef4444",
-        "--text-primary": "#e0e6f0",
-        "--text-secondary": "#8899b4",
-        "--text-muted": "#4a5568",
-        "--glass-blur": "20px",
-        "--glass-border": "1px solid rgba(100, 160, 255, 0.15)",
-        "--shadow-panel": "0 8px 32px rgba(0, 0, 0, 0.3)",
-        "--shadow-glow": "0 0 20px rgba(74, 158, 255, 0.1)",
-        "--radius": "12px",
-        "--font-mono": "'JetBrains Mono', 'Fira Code', monospace",
-        "--agent-classifier": "#4a9eff",
-        "--agent-comparator": "#ff8c42",
-        "--agent-pricer": "#22c55e",
-    },
-    "blueprint": {
-        "--bg-primary": "rgba(0, 20, 60, 0.95)",
-        "--bg-panel": "rgba(10, 40, 90, 0.5)",
-        "--bg-panel-hover": "rgba(20, 55, 110, 0.6)",
-        "--border-panel": "rgba(200, 220, 255, 0.2)",
-        "--border-glow": "rgba(200, 220, 255, 0.4)",
-        "--accent-primary": "#b0c4ff",
-        "--accent-secondary": "#ffd700",
-        "--accent-success": "#66ff66",
-        "--accent-warning": "#ffcc00",
-        "--accent-danger": "#ff6666",
-        "--text-primary": "#d0e0ff",
-        "--text-secondary": "#8090b0",
-        "--text-muted": "#405070",
-        "--glass-blur": "15px",
-        "--glass-border": "1px solid rgba(200, 220, 255, 0.2)",
-        "--shadow-panel": "0 4px 20px rgba(0, 0, 0, 0.4)",
-        "--shadow-glow": "0 0 15px rgba(200, 220, 255, 0.1)",
-        "--radius": "8px",
-        "--font-mono": "'Courier New', monospace",
-        "--agent-classifier": "#b0c4ff",
-        "--agent-comparator": "#ffd700",
-        "--agent-pricer": "#66ff66",
-    },
-    "construction_site": {
-        "--bg-primary": "rgba(30, 20, 10, 0.95)",
-        "--bg-panel": "rgba(60, 40, 20, 0.5)",
-        "--bg-panel-hover": "rgba(80, 55, 30, 0.6)",
-        "--border-panel": "rgba(255, 160, 60, 0.2)",
-        "--border-glow": "rgba(255, 140, 40, 0.3)",
-        "--accent-primary": "#ff8c28",
-        "--accent-secondary": "#ffd700",
-        "--accent-success": "#4ade80",
-        "--accent-warning": "#fbbf24",
-        "--accent-danger": "#f87171",
-        "--text-primary": "#f0e6d0",
-        "--text-secondary": "#b4a088",
-        "--text-muted": "#6b5a48",
-        "--glass-blur": "12px",
-        "--glass-border": "1px solid rgba(255, 160, 60, 0.2)",
-        "--shadow-panel": "0 6px 24px rgba(0, 0, 0, 0.4)",
-        "--shadow-glow": "0 0 15px rgba(255, 140, 40, 0.1)",
-        "--radius": "8px",
-        "--font-mono": "'JetBrains Mono', monospace",
-        "--agent-classifier": "#ff8c28",
-        "--agent-comparator": "#ffd700",
-        "--agent-pricer": "#4ade80",
-    },
-}
-
-DEFAULT_THEME = "minority_report"
-```
-
-**Step 3: Create styles**
-
-Create `boq_app/styles.py`:
-
-```python
-"""All CSS: glassmorphism base, component styles, Streamlit overrides."""
-
-
-def build_css(theme_vars: dict[str, str]) -> str:
-    """Build complete CSS string from theme variables."""
-    root_vars = "\n".join(f"    {k}: {v};" for k, v in theme_vars.items())
-
-    return f"""
-<style>
-:root {{
-{root_vars}
-}}
-
-/* --- Base: hide Streamlit chrome --- */
-#MainMenu, footer, header {{visibility: hidden;}}
-.stDeployButton {{display: none;}}
-
-/* --- Glassmorphism panels --- */
-[data-testid="stVerticalBlock"] > div > div[data-testid="stVerticalBlockBorderWrapper"] {{
-    background: var(--bg-panel) !important;
-    backdrop-filter: blur(var(--glass-blur)) !important;
-    -webkit-backdrop-filter: blur(var(--glass-blur)) !important;
-    border: var(--glass-border) !important;
-    border-radius: var(--radius) !important;
-    box-shadow: var(--shadow-panel) !important;
-    border-top: 2px solid var(--border-glow) !important;
-}}
-
-/* --- Global background --- */
-.stApp {{
-    background: var(--bg-primary) !important;
-}}
-
-/* --- Pipeline bar dots --- */
-.pipeline-dot {{
-    width: 12px; height: 12px;
-    border-radius: 50%;
-    display: inline-block;
-    margin: 0 4px;
-    background: var(--text-muted);
-    transition: all 0.3s ease;
-}}
-.pipeline-dot.active {{
-    background: var(--accent-primary);
-    box-shadow: 0 0 10px var(--accent-primary);
-    animation: pulse 1.5s infinite;
-}}
-.pipeline-dot.done {{
-    background: var(--accent-success);
-}}
-
-@keyframes pulse {{
-    0%, 100% {{ opacity: 1; }}
-    50% {{ opacity: 0.5; }}
-}}
-
-/* --- Agent badges --- */
-.agent-badge {{
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: bold;
-    font-family: var(--font-mono);
-}}
-.agent-badge.classifier {{ background: var(--agent-classifier); color: #000; }}
-.agent-badge.comparator {{ background: var(--agent-comparator); color: #000; }}
-.agent-badge.pricer {{ background: var(--agent-pricer); color: #000; }}
-
-/* --- Confidence bars --- */
-.confidence-bar {{
-    height: 8px;
-    border-radius: 4px;
-    background: var(--text-muted);
-    overflow: hidden;
-    margin: 4px 0;
-}}
-.confidence-bar-fill {{
-    height: 100%;
-    border-radius: 4px;
-    transition: width 0.5s ease;
-}}
-
-/* --- Navigation tree --- */
-.nav-item {{
-    padding: 6px 12px;
-    border-left: 3px solid transparent;
-    cursor: pointer;
-    transition: all 0.2s;
-    font-family: var(--font-mono);
-    font-size: 0.85rem;
-}}
-.nav-item:hover {{
-    background: var(--bg-panel-hover);
-}}
-.nav-item.active {{
-    border-left-color: var(--accent-primary);
-    background: var(--bg-panel-hover);
-    box-shadow: var(--shadow-glow);
-}}
-.nav-item.matched {{ border-left-color: var(--accent-success); }}
-.nav-item.pending {{ border-left-color: var(--text-muted); }}
-
-/* --- Streamlit widget overrides --- */
-.stButton > button {{
-    background: var(--bg-panel) !important;
-    border: var(--glass-border) !important;
-    color: var(--text-primary) !important;
-    border-radius: var(--radius) !important;
-}}
-.stButton > button:hover {{
-    background: var(--bg-panel-hover) !important;
-    box-shadow: var(--shadow-glow) !important;
-}}
-
-/* --- Match cards --- */
-.match-card {{
-    background: var(--bg-panel);
-    border: var(--glass-border);
-    border-radius: var(--radius);
-    padding: 12px;
-    margin: 8px 0;
-    transition: all 0.2s;
-}}
-.match-card:hover {{
-    border-color: var(--accent-primary);
-    box-shadow: var(--shadow-glow);
-}}
-</style>
-"""
-```
-
-**Step 4: Create app skeleton**
-
-Create `boq_app/app.py`:
-
-```python
-"""Main Streamlit entry point: 3-column glassmorphism layout."""
-
-import streamlit as st
-
-from themes import THEMES, DEFAULT_THEME
-from styles import build_css
-
-# --- Page config ---
-st.set_page_config(
-    page_title="Troškovnjik BoQ Matcher",
-    page_icon="🏗️",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
-
-# --- Session state init ---
-if "theme" not in st.session_state:
-    st.session_state.theme = DEFAULT_THEME
-if "app_state" not in st.session_state:
-    st.session_state.app_state = {
-        "pipeline_stage": "upload",
-        "selected_unit_idx": 0,
-        "parsed_boq": None,
-        "reasoning_log": [],
-        "matches": [],
-        "suggestions": {},
-        "stats": {},
-    }
-
-# --- Inject CSS ---
-theme_vars = THEMES[st.session_state.theme]
-st.markdown(build_css(theme_vars), unsafe_allow_html=True)
-
-# --- Header ---
-header_cols = st.columns([3, 6, 2, 1])
-with header_cols[0]:
-    st.markdown("### 🏗️ Troškovnjik")
-with header_cols[1]:
-    # Pipeline bar placeholder
-    st.caption("Upload → Parse → Index → Match → Suggest → Review")
-with header_cols[2]:
-    st.selectbox(
-        "Theme",
-        list(THEMES.keys()),
-        key="theme",
-        label_visibility="collapsed",
-    )
-with header_cols[3]:
-    st.file_uploader("📁", type=["xlsx"], key="upload", label_visibility="collapsed")
-
-# --- 3-column layout ---
-left, center, right = st.columns([1, 2, 1])
-
-with left:
-    with st.container(border=True):
-        st.markdown("#### BoQ Navigator")
-        st.caption("Upload a file to begin")
-
-with center:
-    with st.container(border=True):
-        st.markdown("#### Item Detail")
-        st.caption("Select an item from the navigator")
-    with st.container(border=True):
-        st.markdown("#### Match Results")
-        st.caption("Matches will appear here")
-
-with right:
-    with st.container(border=True):
-        st.markdown("#### LLM Reasoning")
-        st.caption("Agent activity will appear here")
-    with st.container(border=True):
-        st.markdown("#### Confidence Breakdown")
-        st.caption("Match scoring factors")
-
-# --- Stats footer ---
-f1, f2, f3, f4 = st.columns(4)
-f1.metric("AVG", "—")
-f2.metric("MIN", "—")
-f3.metric("MAX", "—")
-f4.metric("MATCHES", "—")
-```
-
-**Step 5: Verify Streamlit loads**
-
-Run: `uv run streamlit run boq_app/app.py`
-Expected: App loads in browser with glassmorphism panels, 3 columns, theme switcher
-
-**Step 6: Commit**
-
-```bash
-git add boq_app/ .streamlit/
-git commit -m "feat: add Streamlit skeleton with glassmorphism theming (3 themes)"
-```
+**Files:** `boq_app/app.py`, `themes.py`, `styles.py`, `.streamlit/config.toml`, `boq_ui.py`
 
 ---
 
-## Task 15: Streamlit Data Models & Mock Data
+## Task 15: Streamlit Data Models & Mock Data — DONE (Batch 1)
+
+**Status:** Complete in `.worktrees/boq-streamlit-ui`.
+
+**What was built (differs from original plan):**
+
+- Models include extra enums: `MatchStatus`, `PipelineStepStatus`
+- Extra models: `PriceStatsUI`, `PipelineStepUI` (not in plan)
+- `ConfidenceBreakdownUI` does **NOT** have `overall` computed field (needs adding)
+- Field names use frontend conventions: `agent_name`, `match_id`, `source_file`, `year`, etc.
+- Mock data: **7 items** (chapters + work items), **5 matches** (richer than planned 3/2)
+- State manager has richer helpers: `get_selected_item()`, `update_pipeline_step()`, etc.
+
+**Files:** `boq_app/models.py`, `mock_data.py`, `state.py`
+
+**Action needed in Batch 2:** Add `overall` computed field to `ConfidenceBreakdownUI`.
+
+---
+
+## Task 16: Streamlit Components — DONE (Batch 1)
+
+**Status:** Complete in `.worktrees/boq-streamlit-ui`.
+
+**What was built (differs from original plan):**
+
+Actual component architecture consolidates into **4 active components** (not 7 flat):
+
+| Active Component | What it does |
+|-----------------|--------------|
+| `header.py` | Title + pipeline dot bar + theme selector |
+| `navigator.py` | Hierarchical tree via `st.radio()` + CSS indent |
+| `match_carousel.py` | Stacked cards with depth layering, DETAILS/APPLY buttons |
+| `unit_panel.py` | **Unified** 5-section panel: header, priced lines, stats, confidence, reasoning |
+
+Legacy files exist but are **unused** (delete in Batch 2 polish):
+`item_detail.py`, `match_cards.py`, `reasoning_panel.py`, `confidence_panel.py`, `stats_footer.py`
+
+**Files:** `boq_app/components/header.py`, `navigator.py`, `match_carousel.py`, `unit_panel.py`
+
+---
+
+## Task 17: Streamlit Interactivity
+
+**Worktree:** `.worktrees/boq-streamlit-ui`
 
 **Files:**
-- Create: `boq_app/models.py`
-- Create: `boq_app/mock_data.py`
-- Create: `boq_app/state.py`
+- Modify: `boq_app/app.py`
+- Modify: `boq_app/models.py` (add `overall` computed field to `ConfidenceBreakdownUI`)
+- Modify: `boq_app/components/navigator.py`
+- Modify: `boq_app/components/match_carousel.py`
+- Modify: `boq_app/components/unit_panel.py`
 
-**Step 1: Create UI models**
+**Step 1: Add `overall` computed field to ConfidenceBreakdownUI**
 
-Create `boq_app/models.py`:
+In `boq_app/models.py`, add `computed_field` import and the `overall` property to `ConfidenceBreakdownUI`:
 
 ```python
-"""UI-side Pydantic models — thin wrappers around backend models.
-
-These map directly to backend models from backend/src/models/ and
-backend/src/agent/schemas.py. Import paths are kept separate so the
-Streamlit app can run standalone with mock data.
-"""
-
-from __future__ import annotations
-
 from pydantic import BaseModel, Field, computed_field
 
-
-# Mirrors backend LogicalUnit
-class BoQItemUI(BaseModel):
-    id: str
-    item_number: str
-    title: str
-    description: str = ""
-    priced_lines: list[PricedLineUI] = []
-    parent_section: str = ""
-    parent_chapter: str = ""
-    level: int = 0  # 0=chapter, 1=section, 2=subsection, 3=work_item
-    status: str = "pending"  # "pending", "matched", "applied"
-
-
-# Mirrors backend PricedLine
-class PricedLineUI(BaseModel):
-    item_number: str
-    description: str = ""
-    unit: str = ""
-    quantity: float = 0.0
-    unit_price: float | None = None
-    total: float | None = None
-    suggested_price: float | None = None
-    suggestion_confidence: float | None = None
-
-
-# Mirrors backend ParsedBoQ
-class ParsedFileUI(BaseModel):
-    filename: str
-    format_detected: str
-    sheet_name: str
-    chapter_title: str = ""
-    items: list[BoQItemUI] = []
-
-
-# Mirrors backend ConfidenceBreakdown
 class ConfidenceBreakdownUI(BaseModel):
     text_similarity: float = 0.0
     unit_match: float = 0.0
@@ -1374,293 +1079,49 @@ class ConfidenceBreakdownUI(BaseModel):
             + self.description_overlap * 0.15,
             4,
         )
-
-
-# Mirrors backend HistoricComparison
-class HistoricMatchUI(BaseModel):
-    historic_unit_id: int
-    project_name: str
-    source_filename: str = ""
-    project_year: int = 0
-    confidence: ConfidenceBreakdownUI
-    matching_sub_items: list[str] = []
-    missing_sub_items: list[str] = []
-    extra_sub_items: list[str] = []
-    qty_delta_pct: float = 0.0
-    price_lines: list[HistoricMatchLineUI] = []
-
-
-class HistoricMatchLineUI(BaseModel):
-    description: str
-    unit_of_measure: str
-    quantity: float
-    unit_price: float
-
-
-# Mirrors backend ReasoningEntry
-class ReasoningEntryUI(BaseModel):
-    agent: str  # "classifier", "comparator", "pricer"
-    message: str
-    timestamp: str = ""
-
-
-# Fix forward references
-BoQItemUI.model_rebuild()
 ```
 
-**Step 2: Create mock data**
+**Step 2: Verify navigator selection works**
 
-Create `boq_app/mock_data.py`:
+Navigator in `navigator.py` uses `st.radio()` to update `selected_item_id`. Click items and verify `unit_panel.py` updates. If it doesn't, check `on_change` callback wiring.
 
-```python
-"""Realistic Croatian BoQ mock data for development."""
+**Step 3: Verify APPLY button works**
 
-from models import (
-    BoQItemUI,
-    ConfidenceBreakdownUI,
-    HistoricMatchLineUI,
-    HistoricMatchUI,
-    ParsedFileUI,
-    PricedLineUI,
-    ReasoningEntryUI,
-)
+In `match_carousel.py`, `_apply_match()` copies historic prices to priced lines. Click APPLY on a match card, verify the priced lines table in `unit_panel.py` shows updated prices.
 
-MOCK_PARSED_FILE = ParsedFileUI(
-    filename="ES SAVSKA OPATOVINA - Krovopokrivački.xlsx",
-    format_detected="eurospin",
-    sheet_name="Radovi",
-    chapter_title="26. Krovopokrivački - izolacija krova",
-    items=[
-        BoQItemUI(
-            id="unit-1",
-            item_number="3.1.1.",
-            title="Hidroizolacija ravnog krova",
-            description="Izvedba kompletne hidroizolacije ravnog krova uključujući parnu branu, toplinsku izolaciju i završnu hidroizolacijsku membranu.",
-            level=3,
-            status="matched",
-            priced_lines=[
-                PricedLineUI(item_number="3.1.1.a.", description="Parna brana PE folija 0.2mm", unit="m²", quantity=250.0, unit_price=4.50, total=1125.0),
-                PricedLineUI(item_number="3.1.1.b.", description="Toplinska izolacija XPS 5cm", unit="m²", quantity=250.0, unit_price=18.00, total=4500.0),
-                PricedLineUI(item_number="3.1.1.c.", description="Hidroizolacijska membrana PVC 1.5mm", unit="m²", quantity=250.0, unit_price=35.00, total=8750.0),
-            ],
-        ),
-        BoQItemUI(
-            id="unit-2",
-            item_number="3.1.2.",
-            title="Toplinska izolacija fasade",
-            description="Izvedba kontaktne fasade s toplinskom izolacijom EPS 10cm.",
-            level=3,
-            status="pending",
-            priced_lines=[
-                PricedLineUI(item_number="3.1.2.a.", description="EPS ploče 10cm", unit="m²", quantity=180.0, unit_price=12.00, total=2160.0),
-                PricedLineUI(item_number="3.1.2.b.", description="Ljepilo i armirna mrežica", unit="m²", quantity=180.0, unit_price=8.50, total=1530.0),
-            ],
-        ),
-        BoQItemUI(
-            id="unit-3",
-            item_number="3.2.1.",
-            title="Betonski radovi - podloge",
-            description="Izvedba betonskih podloga i stopa beton C40/50.",
-            level=3,
-            status="pending",
-            priced_lines=[
-                PricedLineUI(item_number="3.2.1.a.", description="Beton C40/50", unit="m³", quantity=45.0, unit_price=95.00, total=4275.0),
-                PricedLineUI(item_number="3.2.1.b.", description="Armatura B500B", unit="kg", quantity=3200.0, unit_price=1.20, total=3840.0),
-            ],
-        ),
-    ],
-)
+**Step 4: Wire file upload handler**
 
-MOCK_MATCHES = [
-    HistoricMatchUI(
-        historic_unit_id=101,
-        project_name="Kaufland Osijek (Retfala)",
-        source_filename="Kaufland Osijek (RETFALA).xlsx",
-        project_year=2025,
-        confidence=ConfidenceBreakdownUI(text_similarity=0.88, unit_match=1.0, hierarchy_match=0.75, description_overlap=0.70),
-        matching_sub_items=["parna brana", "toplinska izolacija", "hidroizolacijska membrana"],
-        missing_sub_items=[],
-        extra_sub_items=[],
-        qty_delta_pct=-8.0,
-        price_lines=[
-            HistoricMatchLineUI(description="Parna brana PE folija", unit_of_measure="m²", quantity=230.0, unit_price=4.20),
-            HistoricMatchLineUI(description="Toplinska izolacija XPS", unit_of_measure="m²", quantity=230.0, unit_price=16.50),
-            HistoricMatchLineUI(description="Hidroizolacijska membrana", unit_of_measure="m²", quantity=230.0, unit_price=32.00),
-        ],
-    ),
-    HistoricMatchUI(
-        historic_unit_id=102,
-        project_name="Eurospin Savska Opatovina",
-        source_filename="Eurospin_SO_Krovopokrivački.xlsx",
-        project_year=2025,
-        confidence=ConfidenceBreakdownUI(text_similarity=0.92, unit_match=1.0, hierarchy_match=0.80, description_overlap=0.85),
-        matching_sub_items=["parna brana", "hidroizolacijska membrana"],
-        missing_sub_items=["toplinska izolacija"],
-        extra_sub_items=["vertikalna uz parapetne zidove"],
-        qty_delta_pct=12.5,
-        price_lines=[
-            HistoricMatchLineUI(description="Parna brana", unit_of_measure="m²", quantity=280.0, unit_price=5.00),
-            HistoricMatchLineUI(description="Hidroizolacijska membrana PVC", unit_of_measure="m²", quantity=280.0, unit_price=38.00),
-        ],
-    ),
-]
+Add `st.file_uploader()` in `header.py`. On upload:
+- Read bytes from uploaded file
+- Call `parse_uploaded_file(content, filename)` (mock initially, see Task 18)
+- Populate `app_state["parsed_file"]` with result
+- Advance pipeline stage from "upload" to "parse"
 
-MOCK_REASONING = [
-    ReasoningEntryUI(agent="classifier", message="Klasificiram stavku: Hidroizolacija ravnog krova", timestamp="2026-02-14T10:00:01Z"),
-    ReasoningEntryUI(agent="classifier", message="Pronađen tip: hidroizolacija-ravnog-krova (confidence: 0.85)", timestamp="2026-02-14T10:00:02Z"),
-    ReasoningEntryUI(agent="comparator", message="Tražim historijske stavke za tip: hidroizolacija-ravnog-krova", timestamp="2026-02-14T10:00:03Z"),
-    ReasoningEntryUI(agent="comparator", message="Pronađeno 2 historijskih podudaranja", timestamp="2026-02-14T10:00:04Z"),
-    ReasoningEntryUI(agent="comparator", message="  Kaufland Osijek (2025): sličnost 84%, qty Δ -8.0%", timestamp="2026-02-14T10:00:04Z"),
-    ReasoningEntryUI(agent="comparator", message="  Eurospin SO (2025): sličnost 90%, qty Δ +12.5%", timestamp="2026-02-14T10:00:05Z"),
-    ReasoningEntryUI(agent="pricer", message="Analiziram cijene na temelju historijskih podataka", timestamp="2026-02-14T10:00:06Z"),
-    ReasoningEntryUI(agent="pricer", message="  3.1.1.a.: 4.60 EUR (confidence: 80%)", timestamp="2026-02-14T10:00:07Z"),
-    ReasoningEntryUI(agent="pricer", message="  3.1.1.b.: 16.50 EUR (confidence: 70%)", timestamp="2026-02-14T10:00:07Z"),
-    ReasoningEntryUI(agent="pricer", message="  3.1.1.c.: 35.00 EUR (confidence: 85%)", timestamp="2026-02-14T10:00:08Z"),
-]
-```
+**Step 5: Verify DETAILS expansion toggle**
 
-**Step 3: Create state manager**
+In `match_carousel.py`, DETAILS button expands to show full historic priced lines table. Uses session state to track expanded cards.
 
-Create `boq_app/state.py`:
+**Step 6: Add st.fragment() for independent panel reruns**
 
-```python
-"""Session state initialization and helpers."""
+Wrap navigator and unit_panel render functions with `@st.fragment` decorator to avoid full-page reruns when clicking within one panel.
 
-import streamlit as st
-from themes import DEFAULT_THEME
+**Step 7: Run and verify**
 
+Run: `cd .worktrees/boq-streamlit-ui && uv run streamlit run boq_ui.py`
+Expected: Click navigator → detail updates. Click APPLY → prices copy. Upload → data loads.
 
-def init_state():
-    """Initialize all session state keys if not present."""
-    defaults = {
-        "theme": DEFAULT_THEME,
-        "pipeline_stage": "upload",
-        "selected_unit_idx": 0,
-        "parsed_file": None,
-        "reasoning_log": [],
-        "matches": [],
-        "suggestions": {},
-        "stats": {"avg": 0, "min": 0, "max": 0, "matches": 0},
-        "expanded_cards": set(),
-    }
-    for key, default in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = default
-
-
-def get_state(key: str):
-    return st.session_state.get(key)
-
-
-def set_state(key: str, value):
-    st.session_state[key] = value
-```
-
-**Step 4: Verify imports**
-
-Run: `uv run python -c "from boq_app.models import BoQItemUI; print('OK')"`
-Expected: `OK`
-
-**Step 5: Commit**
-
-```bash
-git add boq_app/models.py boq_app/mock_data.py boq_app/state.py
-git commit -m "feat: add Streamlit UI models, mock data, and state management"
-```
-
----
-
-## Task 16: Streamlit Components
-
-**Files:**
-- Create: `boq_app/components/__init__.py`
-- Create: `boq_app/components/header.py`
-- Create: `boq_app/components/navigator.py`
-- Create: `boq_app/components/item_detail.py`
-- Create: `boq_app/components/match_cards.py`
-- Create: `boq_app/components/reasoning_panel.py`
-- Create: `boq_app/components/confidence_panel.py`
-- Create: `boq_app/components/stats_footer.py`
-
-Each component is a function that renders into its panel. Components use `st.markdown(unsafe_allow_html=True)` for glassmorphism styling and CSS classes defined in `styles.py`.
-
-This is a large task — implement one component at a time, verify it renders, then move to the next. See the Streamlit UI design doc for exact component specifications.
-
-Key patterns:
-- `navigator.py`: `st.radio()` with CSS tree transform, indented by level, colored left border by status
-- `item_detail.py`: glass card with item# badge, title, `st.dataframe()` for priced lines
-- `match_cards.py`: loop over matches, confidence gradient bar, QTY delta badge, APPLY button, expandable details
-- `reasoning_panel.py`: reversed log, monospace, agent badge (CSS class per agent), timestamp
-- `confidence_panel.py`: horizontal bars per scoring factor with `st.markdown()` div fills
-- `header.py`: pipeline dots with active/done CSS classes
-- `stats_footer.py`: `st.metric()` in 4 columns
-
-**Step 1: Create components/__init__.py** (empty file)
-
-**Step 2: Implement all 7 components**
-
-Follow the specifications in the Streamlit UI design doc. Each component takes data from `st.session_state` and renders its panel.
-
-**Step 3: Update app.py to use components**
-
-Replace the placeholder panels in `boq_app/app.py` with component function calls.
-
-**Step 4: Verify all panels render with mock data**
-
-Run: `uv run streamlit run boq_app/app.py`
-Expected: All 7 panels render with mock data, glassmorphism styling applied
-
-**Step 5: Commit**
-
-```bash
-git add boq_app/components/ boq_app/app.py
-git commit -m "feat: add all 7 Streamlit UI components with glassmorphism"
-```
-
----
-
-## Task 17: Streamlit Interactivity
-
-**Files:**
-- Modify: `boq_app/app.py`
-- Modify: `boq_app/components/navigator.py`
-- Modify: `boq_app/components/match_cards.py`
-
-**Step 1: Wire navigator selection**
-
-Clicking a navigator item updates `selected_unit_idx` in session state. The detail card and match panels re-render for the selected unit. Use `st.radio()` `on_change` or `st.fragment()` for independent panel reruns.
-
-**Step 2: Wire APPLY button**
-
-Each match card has an APPLY button. Clicking it copies the historic prices to the selected unit's priced lines in session state. The output panel shows the applied prices.
-
-**Step 3: Wire file upload**
-
-`st.file_uploader` on change populates session state with parsed data (mock data initially, real parsing later). Pipeline stage advances from "upload" to "parse".
-
-**Step 4: Wire MORE/DETAILS expansion**
-
-Each match card has a toggle that expands to show the full historic priced lines table. Uses `expanded_cards` set in session state.
-
-**Step 5: Use st.fragment() for independent panels**
-
-Left navigator, center detail, and right reasoning panels re-run independently using `st.fragment()` to avoid full page reruns.
-
-**Step 6: Verify interactivity**
-
-Run: `uv run streamlit run boq_app/app.py`
-Expected: Click navigator → detail updates. Click APPLY → prices copy. Upload file → data loads.
-
-**Step 7: Commit**
+**Step 8: Commit**
 
 ```bash
 git add boq_app/
-git commit -m "feat: wire Streamlit interactivity (navigator, APPLY, upload, expand)"
+git commit -m "feat: wire interactivity (navigator, APPLY, upload, expand, st.fragment)"
 ```
 
 ---
 
 ## Task 18: Backend Integration
+
+**Worktree:** `.worktrees/boq-streamlit-ui`
 
 **Files:**
 - Create: `boq_app/backend.py`
@@ -1673,31 +1134,89 @@ Create `boq_app/backend.py`:
 ```python
 """Backend integration: mock data stubs → real FastAPI.
 
-Phase 1: Returns mock data for standalone development.
-Phase 2: Calls FastAPI endpoints via httpx.
+Phase 1 (USE_REAL_BACKEND=false): Returns mock data + local xlsx parsing via analyze_xlsx.py.
+Phase 2 (USE_REAL_BACKEND=true): Calls FastAPI endpoints via httpx.
 
-Toggle via USE_REAL_BACKEND flag or environment variable.
+Field names match frontend models (agent_name, match_id, source_file, year, etc.)
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import sys
+from pathlib import Path
 from typing import AsyncGenerator
 
 import httpx
 
-from models import ParsedFileUI, HistoricMatchUI, ReasoningEntryUI
-from mock_data import MOCK_PARSED_FILE, MOCK_MATCHES, MOCK_REASONING
+from models import ParsedFileUI, BoQItemUI, PricedLineUI, HistoricMatchUI, ReasoningEntryUI
+from mock_data import generate_mock_matches, generate_mock_reasoning_log
 
 USE_REAL_BACKEND = os.getenv("BOQ_REAL_BACKEND", "false").lower() == "true"
 BACKEND_URL = os.getenv("BOQ_BACKEND_URL", "http://localhost:8081/api")
 
+# Path to analyze_xlsx.py at repo root (for local xlsx parsing)
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+def parse_uploaded_file_sync(content: bytes, filename: str) -> ParsedFileUI:
+    """Parse an uploaded Excel file using analyze_xlsx.py.
+
+    Uses the repo-root analyze_xlsx.py for real xlsx parsing,
+    converting its output to frontend models.
+    """
+    try:
+        from analyze_xlsx import analyze_file
+        from io import BytesIO
+
+        result = analyze_file(BytesIO(content), filename)
+        items = []
+        for i, unit in enumerate(result.get("units", [])):
+            priced_lines = [
+                PricedLineUI(
+                    item_number=pl.get("item_number", ""),
+                    description=pl.get("description", ""),
+                    unit=pl.get("unit", ""),
+                    quantity=pl.get("quantity", 0.0),
+                    unit_price=pl.get("unit_price"),
+                    total=pl.get("total"),
+                )
+                for pl in unit.get("priced_lines", [])
+            ]
+            items.append(BoQItemUI(
+                id=f"unit-{i}",
+                item_number=unit.get("item_number", ""),
+                title=unit.get("title", ""),
+                description=unit.get("description", ""),
+                level=unit.get("level", 3),
+                priced_lines=priced_lines,
+            ))
+        return ParsedFileUI(
+            filename=filename,
+            format_detected=result.get("format", "unknown"),
+            sheet_name=result.get("sheet_name", ""),
+            chapter_title=result.get("chapter_title", ""),
+            items=items,
+        )
+    except Exception as e:
+        # Fallback: return empty file with error info
+        return ParsedFileUI(
+            filename=filename,
+            format_detected="error",
+            sheet_name="",
+            chapter_title=f"Parse error: {e}",
+            items=[],
+        )
+
 
 async def parse_uploaded_file(content: bytes, filename: str) -> ParsedFileUI:
-    """Parse an uploaded Excel file into structured BoQ data."""
+    """Parse an uploaded Excel file."""
     if not USE_REAL_BACKEND:
-        return MOCK_PARSED_FILE
+        return parse_uploaded_file_sync(content, filename)
 
     async with httpx.AsyncClient() as client:
         resp = await client.post(
@@ -1711,7 +1230,7 @@ async def parse_uploaded_file(content: bytes, filename: str) -> ParsedFileUI:
 async def search_historic_matches(unit_id: str) -> list[HistoricMatchUI]:
     """Search for historic matches for a given unit."""
     if not USE_REAL_BACKEND:
-        return MOCK_MATCHES
+        return generate_mock_matches()
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(f"{BACKEND_URL}/historic/search", params={"q": unit_id})
@@ -1723,11 +1242,10 @@ async def run_suggestions(unit_id: str) -> AsyncGenerator[tuple[str, dict], None
     """Stream SSE events from the agent pipeline.
 
     Yields (event_type, data) tuples matching the backend pipeline format.
+    Field names use frontend conventions (agent_name, match_id, etc.)
     """
     if not USE_REAL_BACKEND:
-        # Mock: yield pre-built reasoning entries with delays
-        import time
-        for entry in MOCK_REASONING:
+        for entry in generate_mock_reasoning_log():
             yield ("reasoning", entry.model_dump())
             await asyncio.sleep(0.1)
         yield ("complete", {})
@@ -1744,7 +1262,6 @@ async def run_suggestions(unit_id: str) -> AsyncGenerator[tuple[str, dict], None
                 if line.startswith("event:"):
                     event_type = line[6:].strip()
                 elif line.startswith("data:"):
-                    import json
                     data = json.loads(line[5:].strip())
                     yield (event_type, data)
 ```
@@ -1756,72 +1273,82 @@ Update `boq_app/app.py` to call `backend.py` functions:
 - Unit selection → `asyncio.run(search_historic_matches(unit_id))`
 - "Run Analysis" button → stream `run_suggestions()` via `st.empty()` live updates
 
-**Step 3: Test with mock data**
+**Step 3: Test with real xlsx files**
 
-Run: `uv run streamlit run boq_app/app.py`
-Expected: Upload triggers mock parsing, analysis streams mock reasoning entries
+Run: `cd .worktrees/boq-streamlit-ui && uv run streamlit run boq_ui.py`
+Upload files from `vanjski-podaci/primjeri-excel-ponuda/` (30 xlsx files).
+Expected: Files parse, navigator populates, Croatian characters display correctly.
 
-**Step 4: Test with real backend**
+**Step 4: Test with real backend (when available)**
 
-Run: `BOQ_REAL_BACKEND=true uv run streamlit run boq_app/app.py`
-Prerequisites: FastAPI backend running on :8081, llama-server on :8080
-Expected: Real Excel parsing, real LLM pipeline, real SSE streaming
+Run: `BOQ_REAL_BACKEND=true uv run streamlit run boq_ui.py`
+Prerequisites: FastAPI backend at :8081 (from `.worktrees/boq-editor`), llama-server at :8080.
 
 **Step 5: Commit**
 
 ```bash
 git add boq_app/backend.py boq_app/app.py
-git commit -m "feat: add backend integration with mock/real toggle"
+git commit -m "feat: add backend integration with local xlsx parsing and mock/real toggle"
 ```
 
 ---
 
-## Task 19: Polish — Themes & Testing
+## Task 19: Polish
+
+**Worktree:** `.worktrees/boq-streamlit-ui`
 
 **Files:**
-- Modify: `boq_app/app.py`
-- Modify: `boq_app/themes.py`
+- Modify: `boq_app/styles.py`
+- Delete: `boq_app/components/item_detail.py` (unused legacy)
+- Delete: `boq_app/components/match_cards.py` (unused legacy)
+- Delete: `boq_app/components/reasoning_panel.py` (unused legacy)
+- Delete: `boq_app/components/confidence_panel.py` (unused legacy)
+- Delete: `boq_app/components/stats_footer.py` (unused legacy)
 
-**Step 1: Verify all 3 themes work**
+**Step 1: Delete unused legacy component files**
 
-Switch themes via the header selectbox. Verify:
-- Minority Report: blue/cyan glass on dark navy
-- Blueprint: white on deep blue
-- Construction Site: warm amber/orange
+Remove: `item_detail.py`, `match_cards.py`, `reasoning_panel.py`, `confidence_panel.py`, `stats_footer.py`
+Verify `components/__init__.py` doesn't import them.
 
-**Step 2: Test with all 30 xlsx files**
+**Step 2: Verify all 3 themes work**
 
-Upload each file from `vanjski-podaci/primjeri-excel-ponuda/` and verify:
-- File parses without errors
-- Navigator populates with items
-- Encoding handles Croatian characters (č, ć, š, ž, đ)
+Switch themes via header selectbox. Verify:
+- Minority Report: light frosted glass, blue accents on `#eef2f8`
+- Blueprint: dark blue with white/cyan accents
+- Construction Site: warm beige/orange
 
-**Step 3: backdrop-filter fallback**
+**Step 3: Test Croatian character encoding**
 
-Test in browser. If `backdrop-filter: blur()` doesn't render, add fallback in `styles.py`:
+Upload xlsx files and verify: č, ć, š, ž, đ display correctly in navigator, detail panel, and match cards.
+
+**Step 4: backdrop-filter fallback**
+
+Add fallback in `styles.py` for browsers without `backdrop-filter` support:
 
 ```css
 @supports not (backdrop-filter: blur(20px)) {
     [data-testid="stVerticalBlockBorderWrapper"] {
-        background: rgba(20, 30, 60, 0.85) !important;
+        background: rgba(255, 255, 255, 0.85) !important;
     }
 }
 ```
 
-**Step 4: Commit**
+**Step 5: Commit**
 
 ```bash
-git add boq_app/
-git commit -m "polish: verify themes, test with all 30 xlsx files, add blur fallback"
+git add -A boq_app/
+git commit -m "polish: remove legacy components, verify themes, add blur fallback"
 ```
 
 ---
 
 ## Task 20: Run All Backend Tests
 
+**Worktree:** `.worktrees/boq-editor`
+
 **Step 1: Run full test suite**
 
-Run: `cd backend && uv run pytest tests/ -v`
+Run: `cd .worktrees/boq-editor/backend && uv run pytest tests/ -v`
 Expected: All tests pass (~24 tests)
 
 **Step 2: Fix any failures and commit**
@@ -1832,9 +1359,9 @@ Expected: All tests pass (~24 tests)
 
 **Prerequisites:** llama-server running at `http://localhost:8080/v1`
 
-**Step 1: Start backend**
+**Step 1: Start backend** (in `.worktrees/boq-editor`)
 
-Run: `cd backend && uv run uvicorn src.main:app --host 127.0.0.1 --port 8081 --reload`
+Run: `cd .worktrees/boq-editor/backend && uv run uvicorn src.main:app --host 127.0.0.1 --port 8081 --reload`
 
 **Step 2: Seed taxonomy**
 
@@ -1855,17 +1382,17 @@ curl -X POST http://localhost:8081/api/taxonomy/seed \
   }'
 ```
 
-**Step 3: Start Streamlit with real backend**
+**Step 3: Start Streamlit with real backend** (in `.worktrees/boq-streamlit-ui`)
 
-Run: `BOQ_REAL_BACKEND=true uv run streamlit run boq_app/app.py`
+Run: `cd .worktrees/boq-streamlit-ui && BOQ_REAL_BACKEND=true uv run streamlit run boq_ui.py`
 
 **Step 4: Verify end-to-end flow**
 
 1. Upload an xlsx from `vanjski-podaci/`
 2. Navigator populates
-3. Click a unit → detail card shows
-4. Click "Run Analysis" → reasoning panel streams live
-5. Match cards appear with confidence bars and QTY deltas
-6. APPLY button copies prices
-7. Stats footer shows AVG/MIN/MAX/MATCHES
-8. Theme switcher changes palette
+3. Click a unit → unified panel shows item detail, priced lines, stats
+4. Click "Run Analysis" → reasoning section in unit panel streams live
+5. Match carousel shows cards with confidence bars and QTY deltas
+6. APPLY button copies prices to priced lines table
+7. Stats section shows AVG/MIN/MAX/MATCHES
+8. Theme switcher changes palette across all panels
