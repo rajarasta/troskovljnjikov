@@ -8,6 +8,7 @@ interface BoQState {
   selectedRow: BoQItem | null;
   files: BoQFile[];
   items: BoQItem[];
+  workingItems: BoQItem[];
   isLoading: boolean;
   error: string | null;
 
@@ -17,6 +18,7 @@ interface BoQState {
   loadItems: (fileId: string) => Promise<void>;
   selectRow: (row: BoQItem | null) => void;
   deleteFile: (fileId: string) => Promise<void>;
+  updateWorkingItem: (itemId: string, updates: Partial<Pick<BoQItem, "quantity" | "unit_price" | "total">>) => void;
 }
 
 export const useBoQStore = create<BoQState>((set, get) => ({
@@ -24,6 +26,7 @@ export const useBoQStore = create<BoQState>((set, get) => ({
   selectedRow: null,
   files: [],
   items: [],
+  workingItems: [],
   isLoading: false,
   error: null,
 
@@ -36,7 +39,6 @@ export const useBoQStore = create<BoQState>((set, get) => ({
         selectedFileId: uploaded.id,
         isLoading: false,
       }));
-      // Auto-load items for the newly uploaded file
       await get().loadItems(uploaded.id);
     } catch (err) {
       set({
@@ -63,7 +65,9 @@ export const useBoQStore = create<BoQState>((set, get) => ({
     set({ isLoading: true, error: null, selectedFileId: fileId });
     try {
       const items = await api.fetchFileItems(fileId);
-      set({ items, isLoading: false });
+      // Deep copy for working items so edits don't mutate originals
+      const workingItems = items.map((item) => ({ ...item }));
+      set({ items, workingItems, isLoading: false });
     } catch (err) {
       set({
         isLoading: false,
@@ -85,6 +89,7 @@ export const useBoQStore = create<BoQState>((set, get) => ({
         selectedFileId:
           state.selectedFileId === fileId ? null : state.selectedFileId,
         items: state.selectedFileId === fileId ? [] : state.items,
+        workingItems: state.selectedFileId === fileId ? [] : state.workingItems,
         selectedRow:
           state.selectedFileId === fileId ? null : state.selectedRow,
         isLoading: false,
@@ -95,5 +100,19 @@ export const useBoQStore = create<BoQState>((set, get) => ({
         error: err instanceof Error ? err.message : "Failed to delete file",
       });
     }
+  },
+
+  updateWorkingItem: (itemId: string, updates: Partial<Pick<BoQItem, "quantity" | "unit_price" | "total">>) => {
+    set((state) => ({
+      workingItems: state.workingItems.map((item) => {
+        if (item.id !== itemId) return item;
+        const updated = { ...item, ...updates };
+        // Auto-recalculate total when quantity or unit_price changes
+        if ("quantity" in updates || "unit_price" in updates) {
+          updated.total = updated.quantity * updated.unit_price;
+        }
+        return updated;
+      }),
+    }));
   },
 }));

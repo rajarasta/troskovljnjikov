@@ -104,3 +104,18 @@ export async function sendChatMessage(
     body: JSON.stringify({ message }),
   });
 }
+
+// ── Export operations ──────────────────────────────────────────────
+
+export function getExportUrl(fileId: string, format: "xlsx" | "pdf"): string {
+  return `${API_URL}/api/export/${fileId}/${format}`;
+}
+
+// ── Pipeline operations ────────────────────────────────────────────
+
+export async function startPipeline(fileId: string): Promise<{ pipeline_id: string }> {
+  return fetchAPI<{ pipeline_id: string }>("/api/pipeline/start", {
+    method: "POST",
+    body: JSON.stringify({ file_id: fileId }),
+  });
+}

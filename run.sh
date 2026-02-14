@@ -1,22 +1,103 @@
-#!/bin/bash
-# Agentic Document Editor Launcher
-# Starts llama-server in background, then launches Streamlit UI.
-# Cleans up llama-server on exit.
+#!/usr/bin/env bash
+set -euo pipefail
 
-set -e
+# BOQ Matcher - One-click launcher
+# Starts: llama-server (LLM) + FastAPI backend + Next.js frontend
+# Ctrl-C stops everything.
 
-# 1. Start the LLM Server in background
-echo "Starting llama-server..."
-LD_LIBRARY_PATH=./bin:$LD_LIBRARY_PATH ./bin/llama-server -m ./models/llama3.gguf -ngl 99 --parallel 4 --cont-batching --cache-reuse 512 --chat-template chatml &
-SERVER_PID=$!
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAIN_REPO="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd || echo "$SCRIPT_DIR")"
 
-# Give the server a moment to start
-sleep 3
+# ── Config ───────────────────────────────────────────────────────────
 
-# 2. Run the UI (uv will install everything on first run)
-echo "Launching UI..."
-uv run streamlit run main.py
+LLM_PORT=8080
+BACKEND_PORT=8000
+FRONTEND_PORT=3000
 
-# 3. Cleanup on exit
-kill $SERVER_PID 2>/dev/null || true
-echo "Shut down llama-server."
+# llama-server binary and model (from main repo)
+LLAMA_BIN="${MAIN_REPO}/bin/llama-server"
+LLAMA_MODEL="${MAIN_REPO}/models/llama3.gguf"
+
+# ── Colors ───────────────────────────────────────────────────────────
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+PURPLE='\033[0;35m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+log() { echo -e "${DIM}[$(date +%H:%M:%S)]${RESET} $1"; }
+
+# ── Cleanup on exit ─────────────────────────────────────────────────
+
+PIDS=()
+cleanup() {
+    log "${RED}Shutting down...${RESET}"
+    for pid in "${PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    wait 2>/dev/null
+    log "${GREEN}All processes stopped.${RESET}"
+}
+trap cleanup EXIT INT TERM
+
+# ── 1. Start llama-server (if binary exists) ────────────────────────
+
+if [[ -x "$LLAMA_BIN" && -f "$LLAMA_MODEL" ]]; then
+    log "${CYAN}Starting llama-server on port ${LLM_PORT}...${RESET}"
+    LD_LIBRARY_PATH="${MAIN_REPO}/bin:${LD_LIBRARY_PATH:-}" \
+        "$LLAMA_BIN" \
+        -m "$LLAMA_MODEL" \
+        -ngl 99 \
+        --parallel 4 \
+        --cont-batching \
+        --cache-reuse 512 \
+        --chat-template chatml \
+        --port "$LLM_PORT" \
+        > /dev/null 2>&1 &
+    PIDS+=($!)
+    log "${GREEN}llama-server started (PID ${PIDS[-1]})${RESET}"
+    sleep 2
+else
+    log "${RED}llama-server or model not found — skipping LLM server${RESET}"
+    log "${DIM}  Expected: ${LLAMA_BIN}${RESET}"
+    log "${DIM}  Model:    ${LLAMA_MODEL}${RESET}"
+fi
+
+# ── 2. Start FastAPI backend ────────────────────────────────────────
+
+log "${PURPLE}Starting FastAPI backend on port ${BACKEND_PORT}...${RESET}"
+cd "$SCRIPT_DIR/backend"
+uv run uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port "$BACKEND_PORT" \
+    --reload \
+    > /dev/null 2>&1 &
+PIDS+=($!)
+log "${GREEN}Backend started (PID ${PIDS[-1]})${RESET}"
+
+# ── 3. Start Next.js frontend ──────────────────────────────────────
+
+log "${CYAN}Starting Next.js frontend on port ${FRONTEND_PORT}...${RESET}"
+cd "$SCRIPT_DIR/frontend"
+npm run dev -- -p "$FRONTEND_PORT" > /dev/null 2>&1 &
+PIDS+=($!)
+log "${GREEN}Frontend started (PID ${PIDS[-1]})${RESET}"
+
+# ── Ready ────────────────────────────────────────────────────────────
+
+echo ""
+log "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+log "${GREEN}  BOQ Matcher is running!${RESET}"
+log "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo ""
+log "  ${CYAN}Frontend${RESET}:  http://localhost:${FRONTEND_PORT}"
+log "  ${PURPLE}Backend${RESET}:   http://localhost:${BACKEND_PORT}"
+log "  ${DIM}API docs${RESET}:  http://localhost:${BACKEND_PORT}/docs"
+log "  ${DIM}LLM${RESET}:       http://localhost:${LLM_PORT}/v1"
+echo ""
+log "${DIM}Press Ctrl-C to stop all services.${RESET}"
+
+# Wait for all background processes
+wait
