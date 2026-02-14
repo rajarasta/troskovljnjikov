@@ -82,9 +82,9 @@ guesser_agent = Agent(
     output_type=str,
     deps_type=GameState,
     system_prompt=(
-        "You are playing a letter guessing game. "
-        "You will be told clues about a hidden text and your progress so far. "
-        "You must guess one letter at a time. "
+        "You are a text completion assistant. "
+        "You will see a partially revealed text with _ for missing letters. "
+        "Your job is to figure out what the missing letter is based on the surrounding words and context. "
         "Reply with ONLY a single character. Nothing else."
     ),
     retries=2,
@@ -94,18 +94,21 @@ guesser_agent = Agent(
 @guesser_agent.instructions
 def build_game_context(ctx: RunContext[GameState]) -> str:
     gs = ctx.deps
-    display = "".join(gs.guessed_so_far) + "_" * (len(gs.text) - len(gs.guessed_so_far))
+    # Show text with current position marked as ? and future as _
+    chars = list(gs.guessed_so_far)
+    remaining = len(gs.text) - len(chars)
+    if remaining > 0:
+        chars.append("?")  # current position
+        chars.extend(["_"] * (remaining - 1))
+    display = "".join(chars)
+
     lines = [
-        f"Text length: {len(gs.text)} characters.",
-        f"2nd letter: '{gs.anchor_2nd}'.",
-        f"2nd-to-last letter: '{gs.anchor_penultimate}'.",
-        f"5th letter compared to 2nd: {gs.cmp_5th_vs_2nd}.",
-        f"10th letter compared to 2nd-to-last: {gs.cmp_10th_vs_penultimate}.",
-        f"Progress so far: {display}",
-        f"Guessing position: {gs.current_pos + 1} of {len(gs.text)}.",
+        f"Complete this text: {display}",
+        f"The ? at position {gs.current_pos + 1} is the letter you must fill in.",
+        f"Look at the surrounding words and figure out what letter belongs there.",
     ]
     if gs.wrong_guesses:
-        lines.append(f"Wrong guesses for this position: {', '.join(gs.wrong_guesses)}. Do NOT guess these.")
+        lines.append(f"It is NOT any of these: {', '.join(gs.wrong_guesses)}")
     return "\n".join(lines)
 
 
@@ -143,7 +146,7 @@ async def run_game(text: str, progress_bar, status_text):
 
         while True:
             gs.total_guesses += 1
-            result = await guesser_agent.run(f"What is letter {pos + 1}?", deps=gs)
+            result = await guesser_agent.run("What letter replaces the ?", deps=gs)
             guessed = result.output.strip()
             guessed = guessed[0] if guessed else "?"
 
@@ -189,7 +192,7 @@ with col1:
         raw = uploaded_file.getvalue()
         for enc in ("utf-8-sig", "utf-8", "utf-16", "cp1252", "latin-1"):
             try:
-                content = raw.decode(enc)
+                content = raw.decode(enc).strip()
                 break
             except (UnicodeDecodeError, LookupError):
                 continue
