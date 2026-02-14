@@ -4,3 +4,17 @@ __pycache__/
 bin/
 models/
 .worktrees/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend
+backend/data/
+backend/.venv/
+backend/uv.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
