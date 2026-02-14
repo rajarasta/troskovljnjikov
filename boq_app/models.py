@@ -10,7 +10,7 @@ import uuid
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class MatchStatus(str, Enum):
@@ -87,6 +87,17 @@ class ConfidenceBreakdownUI(BaseModel):
     unit_match: float = 0.0
     hierarchy_match: float = 0.0
     description_overlap: float = 0.0
+
+    @computed_field
+    @property
+    def overall(self) -> float:
+        return round(
+            self.text_similarity * 0.4
+            + self.unit_match * 0.25
+            + self.hierarchy_match * 0.2
+            + self.description_overlap * 0.15,
+            4,
+        )
 
 
 class HistoricMatchUI(BaseModel):

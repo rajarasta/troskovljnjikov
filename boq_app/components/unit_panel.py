@@ -23,6 +23,7 @@ from ..state import (
 )
 
 
+@st.fragment
 def render_unit_panel() -> None:
     """Render the unified unit panel with all subdivisions."""
     item = get_selected_item()

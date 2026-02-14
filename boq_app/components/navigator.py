@@ -7,6 +7,7 @@ import streamlit as st
 from ..state import get_state
 
 
+@st.fragment
 def render_navigator() -> None:
     """Render the BoQ item navigator as a tree-like list."""
     state = get_state()
@@ -52,7 +53,7 @@ def render_navigator() -> None:
 
     if selected != state.get("selected_item_id"):
         state["selected_item_id"] = selected
-        st.rerun()
+        st.rerun(scope="app")
 
     # Render status indicators as HTML overlay
     status_html_parts = []

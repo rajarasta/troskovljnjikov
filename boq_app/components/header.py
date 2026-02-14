@@ -21,6 +21,14 @@ def render_header() -> None:
             '<div class="app-title">Troškovnik</div>',
             unsafe_allow_html=True,
         )
+        uploaded = st.file_uploader(
+            "Upload BoQ",
+            type=["xlsx", "xls"],
+            label_visibility="collapsed",
+            key="boq_file_uploader",
+        )
+        if uploaded:
+            state["uploaded_file"] = uploaded
 
     with h_center:
         _render_pipeline(state["pipeline"])
