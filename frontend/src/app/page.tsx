@@ -98,7 +98,7 @@ export default function HomePage() {
       </div>
 
       {/* Main four-column grid */}
-      <main className="flex-1 grid grid-cols-[280px_280px_1fr_1fr] gap-3 p-3 min-h-0">
+      <main className="flex-1 grid grid-cols-[280px_1fr_1fr_1fr] gap-3 p-3 min-h-0">
         {/* Col 1: Chat panels */}
         <ChatPanelList />
 
