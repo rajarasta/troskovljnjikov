@@ -45,6 +45,8 @@ class BoQItemSchema(BaseModel):
 class MatchRequest(BaseModel):
     description: str
     quantity: float | None = None
+    unit: str | None = None
+    item_number: str | None = None
     threshold: float = 0.3
     max_results: int = 20
 

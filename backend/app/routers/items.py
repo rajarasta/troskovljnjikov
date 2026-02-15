@@ -67,6 +67,8 @@ def match_items(
         items=item_dicts,
         threshold=req.threshold,
         max_results=req.max_results,
+        query_unit=req.unit,
+        query_code=req.item_number,
     )
 
     stats = calculate_match_stats(matches)

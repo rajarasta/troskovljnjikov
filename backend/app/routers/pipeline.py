@@ -19,6 +19,7 @@ from app.services.boq_matcher import (
     calculate_match_stats,
     find_similar_descriptions,
 )
+from app.services.matching_pipeline import MatchingPipeline
 from app.ws.events import (
     AGENT_ERROR,
     AGENT_PROGRESS,
@@ -173,6 +174,10 @@ async def _run_pipeline(pipeline_id: str) -> None:
                 pipeline_id,
             )
 
+            # Build BM25 index once for all historical items
+            match_pipeline = MatchingPipeline()
+            match_pipeline.build_index(historical_dicts)
+
             for idx, item in enumerate(items_data):
                 description = item.get("description", "")
                 if not description or len(description) < 3:
@@ -192,6 +197,9 @@ async def _run_pipeline(pipeline_id: str) -> None:
                         items=historical_dicts,
                         threshold=settings.MATCH_THRESHOLD,
                         max_results=settings.MAX_MATCH_RESULTS,
+                        pipeline=match_pipeline,
+                        query_unit=item.get("unit"),
+                        query_code=item.get("itemNumber"),
                     )
 
                     if matches:
