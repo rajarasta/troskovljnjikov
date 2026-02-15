@@ -59,6 +59,11 @@ def test_normalize_celicni():
     assert normalize_units("čel. profil") == "čelični profil"
 
 
+def test_normalize_celicna_no_false_match():
+    """Regression: 'čel' must NOT match inside 'čelična'."""
+    assert normalize_units("čelična konstrukcija") == "čelična konstrukcija"
+
+
 def test_normalize_multiple():
     assert normalize_units("5 m³ betona, 10 m² oplate") == "5 m3 betona, 10 m2 oplate"
 

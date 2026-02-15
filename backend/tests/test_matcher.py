@@ -3,24 +3,9 @@ from __future__ import annotations
 from app.services.boq_matcher import (
     calculate_match_stats,
     calculate_quantity_comparison,
-    calculate_similarity,
     find_similar_descriptions,
-    levenshtein_distance,
     normalize_text,
 )
-
-
-def test_levenshtein_identical():
-    assert levenshtein_distance("abc", "abc") == 0
-
-
-def test_levenshtein_simple():
-    assert levenshtein_distance("kitten", "sitting") == 3
-
-
-def test_levenshtein_early_termination():
-    result = levenshtein_distance("abc", "xyz", max_distance=1)
-    assert result == float("inf")
 
 
 def test_normalize_text_croatian():
@@ -37,21 +22,6 @@ def test_normalize_text_strips_special():
     result = normalize_text("Price: 100,00 EUR!")
     assert ":" not in result
     assert "!" not in result
-
-
-def test_similarity_identical():
-    score = calculate_similarity("podložni beton", "podložni beton")
-    assert score == 1.0
-
-
-def test_similarity_similar():
-    score = calculate_similarity("podložni beton C12/15", "podložni beton C15/20")
-    assert score > 0.5
-
-
-def test_similarity_different():
-    score = calculate_similarity("betoniranje temelja", "krovopokrivački radovi")
-    assert score < 0.3
 
 
 def test_find_similar_descriptions():

@@ -1,122 +1,15 @@
 """
-BoQ Matcher - Fuzzy text matching for BoQ descriptions.
+BoQ Matcher - Text matching for BoQ descriptions.
 
-Uses string similarity algorithms to find matching historical items.
-Direct port of boqMatcher.js.
+Delegates to the multi-stage matching pipeline (BM25 + structural re-ranking).
+Retains utility functions for grouping, statistics, and quantity comparison.
 """
 from __future__ import annotations
 
 import re
 from typing import Any
 
-
-def levenshtein_distance(str1: str, str2: str, max_distance: float = float("inf")) -> int | float:
-    """Calculate Levenshtein distance between two strings with early termination.
-
-    Uses a space-optimized single-array approach.
-
-    Args:
-        str1: First string.
-        str2: Second string.
-        max_distance: Optional maximum distance; returns inf if exceeded.
-
-    Returns:
-        The edit distance, or float('inf') if it exceeds max_distance.
-    """
-    m = len(str1)
-    n = len(str2)
-
-    # Early termination if length difference exceeds max_distance
-    if abs(m - n) > max_distance:
-        return float("inf")
-
-    # Optimize for empty strings
-    if m == 0:
-        return n
-    if n == 0:
-        return m
-
-    # Use single array instead of full matrix (space optimization)
-    prev_row = list(range(n + 1))
-    curr_row = [0] * (n + 1)
-
-    for i in range(1, m + 1):
-        curr_row[0] = i
-        min_in_row = curr_row[0]
-
-        for j in range(1, n + 1):
-            cost = 0 if str1[i - 1] == str2[j - 1] else 1
-            curr_row[j] = min(
-                prev_row[j] + 1,        # deletion
-                curr_row[j - 1] + 1,    # insertion
-                prev_row[j - 1] + cost,  # substitution
-            )
-            min_in_row = min(min_in_row, curr_row[j])
-
-        # Early termination if all values in row exceed max_distance
-        if min_in_row > max_distance:
-            return float("inf")
-
-        # Swap rows
-        prev_row, curr_row = curr_row, prev_row
-
-    return prev_row[n]
-
-
-def calculate_similarity(str1: str, str2: str) -> float:
-    """Calculate similarity between two strings (0 to 1).
-
-    Uses a combination of Levenshtein distance and token overlap (Jaccard index).
-    Weights: Jaccard 0.6, Levenshtein 0.3, containment bonus 0.2.
-
-    Args:
-        str1: First string.
-        str2: Second string.
-
-    Returns:
-        Similarity score between 0 and 1.
-    """
-    if not str1 or not str2:
-        return 0.0
-
-    s1 = normalize_text(str1)
-    s2 = normalize_text(str2)
-
-    if s1 == s2:
-        return 1.0
-    if len(s1) == 0 or len(s2) == 0:
-        return 0.0
-
-    # Token-based similarity (Jaccard index)
-    tokens1 = {t for t in s1.split() if len(t) > 2}
-    tokens2 = {t for t in s2.split() if len(t) > 2}
-
-    if len(tokens1) == 0 or len(tokens2) == 0:
-        # Fall back to character-based similarity
-        max_len = max(len(s1), len(s2))
-        distance = levenshtein_distance(s1, s2)
-        return 1.0 - (distance / max_len)
-
-    intersection = tokens1 & tokens2
-    union = tokens1 | tokens2
-    jaccard_similarity = len(intersection) / len(union)
-
-    # Also calculate substring containment bonus
-    containment_bonus = 0.0
-    if s1 in s2 or s2 in s1:
-        containment_bonus = 0.2
-
-    # Calculate Levenshtein-based similarity for shorter strings
-    levenshtein_similarity = 0.0
-    if len(s1) < 100 and len(s2) < 100:
-        max_len = max(len(s1), len(s2))
-        distance = levenshtein_distance(s1, s2)
-        levenshtein_similarity = 1.0 - (distance / max_len)
-
-    # Combine scores with weights
-    combined_score = (jaccard_similarity * 0.6) + (levenshtein_similarity * 0.3) + containment_bonus
-
-    return min(1.0, combined_score)
+from app.services.matching_pipeline import MatchingPipeline
 
 
 def normalize_text(text: str) -> str:
@@ -148,11 +41,14 @@ def find_similar_descriptions(
     threshold: float = 0.3,
     max_results: int = 20,
     include_exact: bool = True,
+    pipeline: MatchingPipeline | None = None,
+    query_unit: str | None = None,
+    query_code: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Find similar descriptions in the indexed items.
+    """Find similar descriptions using the multi-stage matching pipeline.
 
-    Scores against both ``description`` and ``fullDescription`` fields,
-    taking the higher score.
+    If a pre-built pipeline is provided, uses it (fast path for batch).
+    Otherwise, builds a temporary index from items (backward compat).
 
     Args:
         query: The description to search for.
@@ -160,6 +56,9 @@ def find_similar_descriptions(
         threshold: Minimum similarity score to include (0-1).
         max_results: Maximum number of results to return.
         include_exact: Whether to prioritize exact matches.
+        pipeline: Optional pre-built MatchingPipeline (avoids rebuilding index).
+        query_unit: Optional unit of the query item for boosting.
+        query_code: Optional hierarchical code for boosting.
 
     Returns:
         Matched items with ``similarity`` and ``matchedQuery`` keys added.
@@ -167,52 +66,30 @@ def find_similar_descriptions(
     if not query or not items:
         return []
 
-    normalized_query = normalize_text(query)
+    p = pipeline or MatchingPipeline()
+    if not p.is_indexed:
+        p.build_index(items)
 
-    # Score all items - check both description and fullDescription (parent context)
-    scored: list[dict[str, Any]] = []
-    for item in items:
-        description = item.get("description", "")
-        desc_similarity = calculate_similarity(normalized_query, description)
-
-        # Also score against fullDescription if available (includes parent context)
-        full_desc_similarity = 0.0
-        full_description = item.get("fullDescription", "")
-        if full_description and full_description != description:
-            full_desc_similarity = calculate_similarity(normalized_query, full_description)
-
-        # Use the higher score
-        similarity = max(desc_similarity, full_desc_similarity)
-
-        scored.append({
-            **item,
-            "similarity": similarity,
-            "matchedQuery": query,
-        })
-
-    # Filter by threshold and sort by similarity (descending)
-    filtered = sorted(
-        [s for s in scored if s["similarity"] >= threshold],
-        key=lambda x: x["similarity"],
-        reverse=True,
+    results = p.search(
+        query=query,
+        max_results=max_results,
+        threshold=threshold,
+        query_unit=query_unit,
+        query_code=query_code,
     )
 
-    # If include_exact, prioritize exact matches
-    # Single pass instead of two filter() calls with repeated normalize_text()
     if include_exact:
-        exact_matches: list[dict[str, Any]] = []
-        other_matches: list[dict[str, Any]] = []
-
-        for item in filtered:
-            normalized_desc = normalize_text(item.get("description", ""))
-            if normalized_desc == normalized_query:
-                exact_matches.append(item)
+        normalized_query = normalize_text(query)
+        exact: list[dict[str, Any]] = []
+        other: list[dict[str, Any]] = []
+        for r in results:
+            if normalize_text(r.get("description", "")) == normalized_query:
+                exact.append(r)
             else:
-                other_matches.append(item)
+                other.append(r)
+        return (exact + other)[:max_results]
 
-        return (exact_matches + other_matches)[:max_results]
-
-    return filtered[:max_results]
+    return results
 
 
 def group_matches_by_file(matches: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:

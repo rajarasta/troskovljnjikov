@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from rank_bm25 import BM25Okapi
+from rank_bm25 import BM25Plus
 
 from app.services.text_preprocessor import preprocess, tokenize, extract_unit
 
@@ -59,7 +59,7 @@ class MatchingPipeline:
     """BM25 + structural re-ranking pipeline for BoQ description matching."""
 
     def __init__(self) -> None:
-        self._bm25: BM25Okapi | None = None
+        self._bm25: BM25Plus | None = None
         self._items: list[dict[str, Any]] = []
         self._preprocessed: list[str] = []
         self._tokenized: list[list[str]] = []
@@ -96,7 +96,7 @@ class MatchingPipeline:
             self._preprocessed.append(pp)
             self._tokenized.append(tokenize(pp))
 
-        self._bm25 = BM25Okapi(self._tokenized)
+        self._bm25 = BM25Plus(self._tokenized)
 
     def _retrieve_candidates(
         self, query: str, top_k: int = 20

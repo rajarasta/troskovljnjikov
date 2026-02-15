@@ -68,10 +68,12 @@ _UNIT_NORMALIZE: dict[str, str] = {
 
 # Build a single regex from the unit map, matching longest keys first
 # to avoid partial-match issues (e.g. "čel" matching inside "čelični").
-# Keys that end with '.' use a literal dot; others require a word boundary.
+# Pure-word keys get \b boundaries; keys with punctuation/superscripts don't.
 _UNIT_RE = re.compile(
     "|".join(
-        re.escape(k)
+        r"\b" + re.escape(k) + r"\b"
+        if re.fullmatch(r"\w+", k, re.UNICODE)
+        else re.escape(k)
         for k in sorted(_UNIT_MAP, key=len, reverse=True)
     )
 )

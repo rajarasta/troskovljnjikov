@@ -60,8 +60,8 @@ def test_match_items(client, sample_xlsx_path, second_sample_path):
     assert len(data["matches"]) > 0
     assert data["stats"]["avgPrice"] > 0
 
-    # First match should have high similarity
-    assert data["matches"][0]["similarity"] > 0.8
+    # First match should have reasonable similarity (BM25+trigram scoring)
+    assert data["matches"][0]["similarity"] > 0.35
 
     # Should have quantity comparison
     assert data["matches"][0]["quantity_comparison"] is not None
