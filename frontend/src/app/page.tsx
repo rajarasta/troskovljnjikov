@@ -1,20 +1,20 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useRef, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import { Activity } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useBoQStore } from "@/stores/boqStore";
 import { useAgentStore } from "@/stores/agentStore";
 import { useSelectionPipeline } from "@/hooks/useSelectionPipeline";
-import { useRowAlignment } from "@/hooks/useRowAlignment";
 
 import TopBar from "@/components/layout/TopBar";
 import ChatPanelList from "@/components/chat/ChatPanelList";
 import RegexResultList from "@/components/boq/RegexResultList";
 import SpreadsheetView from "@/components/spreadsheet/SpreadsheetView";
-import EditableSheet from "@/components/spreadsheet/EditableSheet";
 import SheetPreview from "@/components/spreadsheet/SheetPreview";
+import RawSheetGrid from "@/components/spreadsheet/RawSheetGrid";
+import ExcelView from "@/components/spreadsheet/ExcelView";
 import AgentPanel from "@/components/agents/AgentPanel";
 import PipelineBar from "@/components/layout/PipelineBar";
 import ColumnHeader from "@/components/layout/ColumnHeader";
@@ -57,33 +57,11 @@ function AgentActivityButton() {
 export default function HomePage() {
   const { isConnected } = useWebSocket();
   const { items } = useBoQStore();
-
-  // ── Scroll synchronization between Current BOQ and Working Copy ──
+  const [boqViewMode, setBoqViewMode] = useState<"parsed" | "raw" | "excel">("parsed");
   const boqScrollRef = useRef<HTMLDivElement>(null);
-  const workingScrollRef = useRef<HTMLDivElement>(null);
-  const isSyncing = useRef(false);
-
-  const handleBoqScroll = useCallback(() => {
-    if (isSyncing.current) return;
-    isSyncing.current = true;
-    if (boqScrollRef.current && workingScrollRef.current) {
-      workingScrollRef.current.scrollTop = boqScrollRef.current.scrollTop;
-    }
-    requestAnimationFrame(() => { isSyncing.current = false; });
-  }, []);
-
-  const handleWorkingScroll = useCallback(() => {
-    if (isSyncing.current) return;
-    isSyncing.current = true;
-    if (boqScrollRef.current && workingScrollRef.current) {
-      boqScrollRef.current.scrollTop = workingScrollRef.current.scrollTop;
-    }
-    requestAnimationFrame(() => { isSyncing.current = false; });
-  }, []);
 
   // ── Pipeline hooks ──────────────────────────────────────────────
   useSelectionPipeline();
-  useRowAlignment(boqScrollRef, workingScrollRef);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -97,31 +75,73 @@ export default function HomePage() {
         </AnimatePresence>
       </div>
 
-      {/* Main four-column grid */}
-      <main className="flex-1 grid grid-cols-[280px_1fr_1fr_1fr] gap-3 p-3 min-h-0">
+      {/* Main three-column grid */}
+      <main className="flex-1 grid grid-cols-[280px_1fr_2fr] gap-3 p-3 min-h-0">
         {/* Col 1: Chat panels */}
         <ChatPanelList />
 
         {/* Col 2: Regex / deterministic results */}
         <RegexResultList />
 
-        {/* Col 3: Current BOQ */}
+        {/* Col 3: Unified BOQ (view + edit) */}
         <div className="glass-panel flex flex-col min-h-0">
-          <ColumnHeader title="Current BOQ" accent="cyan" badge={`${items.length} items`} />
-          <div className="shrink-0 p-2">
-            <SheetPreview />
-          </div>
-          <div className="flex-1 min-h-0" onScroll={handleBoqScroll}>
-            <SpreadsheetView ref={boqScrollRef} />
-          </div>
-        </div>
-
-        {/* Col 4: Edited (Working Copy) */}
-        <div className="glass-panel flex flex-col min-h-0">
-          <ColumnHeader title="Edited" accent="purple" badge="editable" />
-          <div className="flex-1 min-h-0" onScroll={handleWorkingScroll}>
-            <EditableSheet ref={workingScrollRef} />
-          </div>
+          <ColumnHeader
+            title="BOQ"
+            accent="cyan"
+            badge={`${items.length} items`}
+            actions={
+              <div className="flex items-center rounded bg-bg-tertiary p-0.5">
+                <button
+                  onClick={() => setBoqViewMode("parsed")}
+                  className={`px-2 py-0.5 text-[10px] font-mono rounded transition-colors ${
+                    boqViewMode === "parsed"
+                      ? "bg-accent-cyan/15 text-accent-cyan"
+                      : "text-text-muted hover:text-text-secondary"
+                  }`}
+                >
+                  Parsed
+                </button>
+                <button
+                  onClick={() => setBoqViewMode("raw")}
+                  className={`px-2 py-0.5 text-[10px] font-mono rounded transition-colors ${
+                    boqViewMode === "raw"
+                      ? "bg-accent-cyan/15 text-accent-cyan"
+                      : "text-text-muted hover:text-text-secondary"
+                  }`}
+                >
+                  Raw
+                </button>
+                <button
+                  onClick={() => setBoqViewMode("excel")}
+                  className={`px-2 py-0.5 text-[10px] font-mono rounded transition-colors ${
+                    boqViewMode === "excel"
+                      ? "bg-accent-cyan/15 text-accent-cyan"
+                      : "text-text-muted hover:text-text-secondary"
+                  }`}
+                >
+                  Excel
+                </button>
+              </div>
+            }
+          />
+          {boqViewMode === "parsed" ? (
+            <>
+              <div className="shrink-0 p-2">
+                <SheetPreview />
+              </div>
+              <div className="flex-1 min-h-0">
+                <SpreadsheetView ref={boqScrollRef} />
+              </div>
+            </>
+          ) : boqViewMode === "raw" ? (
+            <div className="flex-1 min-h-0">
+              <RawSheetGrid />
+            </div>
+          ) : (
+            <div className="flex-1 min-h-0">
+              <ExcelView />
+            </div>
+          )}
         </div>
       </main>
 
