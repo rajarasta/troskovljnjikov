@@ -1,0 +1,66 @@
+Redni broj,Opis,Jedinica,Količina,Jedinična cijena,Iznos
+BRAVARSKI,,,,,
+,,,,,
+,,,,,
+,,,,,
+1,"Izrada i montaža čeličnih nosača za stupove: uključuje mjerenje na licu mjesta, precizno rezanje profila, bušenje otvora za pričvršćenje, zavarivanje prema normama (SMAW/MIG), brušenje spojeva i nanošenje antikorozivnog premaza. Prilagodba za pričvršćenje na postojeću konstrukciju i provjera opterećenja.",kom,12.5,45,562.5
+,,,,,
+,,,,,
+,,,,,
+2,"Izrada čelične ograde s ukrasnim elementima: projekt i izrada okvira, oblikovanje ukrasnih elemenata ručnim radom, zavarivanje točkastim i kontinuiranim šavovima, pjeskarenje i dvokomponentno lakiranje. Uključena montaža na pripremljene temeljne ploče i završna kontrola poravnanja.",m,5,20,100
+,,,,,
+,,,,,
+,,,,,
+3,"CNC rezanje limova i savijanje po nacrtu: uključuje optimizaciju izreza (nesting), lasersko/plesno rezanje materijala do 6 mm, kontrolirano savijanje na CNC preši, označavanje dijelova i paketiranje za montažu. U cijenu uključena kontrola tolerancija i iskaz specifikacija za montažu.",m2,50,4.5,225
+,,,,,
+,,,,,
+,,,,,
+4,"Proizvodnja i ugradnja limenih kapaka i pragova: izrada pragova iz pocinčanog lima, savijanje i prešanje po profilu, bušenje otvora za pričvršćivanje, isporuka i montaža s pričvrsnim elementima, završno brtvljenje i zaštita rubova.",kom,10,32,320
+,,,,,
+,,,,,
+,,,,,
+5,"Zavarivanje i popravak aluminijskih profila: pregled oštećenja, izrada zakrpa, TIG zavarivanje s kontrolom toplinske unije, brušenje i finu obrada spojeva, test mehaničke čvrstoće i završna zaštita protiv korozije za spojeve na vanjskim fasadama.",m,12.5,45,562.5
+,,,,,
+,,,,,
+,,,,,
+6,"Izrada zaštitnih kaveznih konstrukcija za strojeve: dimenzioniranje i montaža čeličnog kaveza, ugradnja pristupnih vrata s bravom, integracija nosača za senzore i kablove, završna kontrola sigurnosnih razmaka i certificiranje prema standardima sigurnosti strojeva.",kom,3,480,1440
+,,,,,
+,,,,,
+,,,,,
+7,"Izrada nosača za staklene fasade: precizna izrada čeličnih i inox nosača, bušenje i ugradnja spojnih elemenata, provjera tolerancija za staklene pakete i montaža privremenih nosača tijekom ugradnje. Uključeno je i galvaniziranje kritičnih elemenata.",kom,7,150,1050
+,,,,,
+,,,,,
+,,,,,
+8,"Popravak i zamjena metalnih spojnih elemenata: demontaža oštećenih elemenata, izrada novih prema specifikaciji, točkasto i kontinuirano zavarivanje, završna provjera dimenzija i antikorozivna zaštita. Uključena hitna intervencija izvan radnog vremena po potrebi.",kom,25,18,450
+,,,,,
+,,,,,
+,,,,,
+9,"Izrada i montaža metalnih pragova i nosača za unutarnje stolarije: precizno rezanje i brušenje rubova, integracija s drvenim elementima, montaža i prilagodba na mjestu, završna kontrola funkcionalnosti i uklanjanje oštrih rubova.",m,50,4.5,225
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+,,,,,
+ELEKTRIČARSKI,,,,,
+,,,,,
+,,,,,
+,,,,,
+10,"Ugradnja kabelskih kanala i nosača za električne instalacije: mjerenje trasa, montaža pocinčanih kabelskih kanala, pričvršćivanje nosača, završno fiksiranje i označavanje trasa za buduće izvedbene radove.",m,120,6.5,780
+,,,,,
+,,,,,
+,,,,,
+11,"Polaganje i spajanje trofaznih napojnih vodova (do 35 mm²): uključuje pripremu vodiča, spojeve u kutijama, stezaljke, označavanje faza i test kontinuiteta te funkcionalnosti.",m,60,12,720
+,,,,,
+,,,,,
+,,,,,
+12,"Ugradnja zidnih utičnica i prekidača — standardna serija: iskop/provođenje kabela, montaža kutija, montaža elemenata, električni priključak i završno testiranje svakog elementa.",kom,40,18.5,740
+,,,,,
+,,,,,
+,,,,,
+13,"Instalacija LED rasvjete (paneli i spotovi) s priključkom na upravljanje i prigušivanje: isporuka i montaža, električni priključak, konfiguracija upravljača (dimmer) i probni rad.",kom,25,45,1125
+,,,,,
+,,,,,
+,,,,,
+14,"Ugradnja i priključak glavne razvodne ploče (do 63A): priprema podloga, montaža ormarića, montaža osigurača i prekidača, kabelske veze i osnovne provjere zaštite i funkcionalnosti.",set,2,350,700
