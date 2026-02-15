@@ -215,6 +215,7 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
             return (
               <tr
                 key={item.id}
+                data-row-index={index}
                 onMouseDown={(e) => handleMouseDown(index, e)}
                 onMouseUp={() => handleMouseUp(index)}
                 onClick={() => handleSelectionClick(index)}

@@ -151,6 +151,7 @@ const EditableSheet = forwardRef<HTMLDivElement>(function EditableSheet(_props, 
             return (
               <tr
                 key={wItem.id}
+                data-row-index={index}
                 onClick={() => handleRowClick(wItem)}
                 className={`
                   cursor-pointer transition-colors duration-100 border-b border-border-default/30
