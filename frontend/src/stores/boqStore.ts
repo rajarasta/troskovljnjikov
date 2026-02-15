@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { BoQFile, BoQItem } from "@/lib/types";
 import * as api from "@/lib/api";
+import { MOCK_ITEMS } from "@/lib/mockData";
 
 interface BoQState {
   // ── State ───────────────────────────────────────────────────────
@@ -16,6 +17,7 @@ interface BoQState {
   uploadFile: (file: File) => Promise<void>;
   loadFiles: () => Promise<void>;
   loadItems: (fileId: string) => Promise<void>;
+  loadMockData: () => void;
   selectRow: (row: BoQItem | null) => void;
   deleteFile: (fileId: string) => Promise<void>;
   updateWorkingItem: (itemId: string, updates: Partial<Pick<BoQItem, "quantity" | "unit_price" | "total">>) => void;
@@ -72,6 +74,17 @@ export const useBoQStore = create<BoQState>((set, get) => ({
         error: err instanceof Error ? err.message : "Failed to load items",
       });
     }
+  },
+
+  loadMockData: () => {
+    const workingItems = MOCK_ITEMS.map((item) => ({ ...item }));
+    set({
+      items: MOCK_ITEMS,
+      workingItems,
+      selectedFileId: "mock-file",
+      isLoading: false,
+      error: null,
+    });
   },
 
   selectRow: (row: BoQItem | null) => {

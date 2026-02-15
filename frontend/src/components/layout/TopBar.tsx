@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Upload, FolderOpen, TreePine, Camera } from "lucide-react";
+import { Upload, FolderOpen, TreePine, Camera, FlaskConical } from "lucide-react";
 import { useBoQStore } from "@/stores/boqStore";
 import UploadZone from "@/components/upload/UploadZone";
 import FileList from "@/components/upload/FileList";
@@ -64,6 +64,14 @@ export default function TopBar({ isConnected }: { isConnected: boolean }) {
       </button>
       <button onClick={() => toggle("photos")} className={buttonClass("photos")}>
         <Camera className="w-3.5 h-3.5" /> Photos
+      </button>
+
+      <div className="w-px h-4 bg-border-default" />
+      <button
+        onClick={() => useBoQStore.getState().loadMockData()}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs text-accent-amber hover:bg-accent-amber/10 border border-transparent hover:border-accent-amber/20 transition-all duration-150"
+      >
+        <FlaskConical className="w-3.5 h-3.5" /> Demo
       </button>
 
       {/* Spacer + connection status */}
