@@ -1,29 +1,25 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useCallback, useRef } from "react";
 import { AnimatePresence } from "framer-motion";
-import { Activity, Camera, TreePine } from "lucide-react";
+import { Activity } from "lucide-react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useBoQStore } from "@/stores/boqStore";
 import { useAgentStore } from "@/stores/agentStore";
+import { useSelectionPipeline } from "@/hooks/useSelectionPipeline";
+import { useRowAlignment } from "@/hooks/useRowAlignment";
 
-import UploadZone from "@/components/upload/UploadZone";
-import FileList from "@/components/upload/FileList";
+import TopBar from "@/components/layout/TopBar";
+import ChatPanelList from "@/components/chat/ChatPanelList";
+import RegexResultList from "@/components/boq/RegexResultList";
 import SpreadsheetView from "@/components/spreadsheet/SpreadsheetView";
 import EditableSheet from "@/components/spreadsheet/EditableSheet";
 import SheetPreview from "@/components/spreadsheet/SheetPreview";
-import { MatchList } from "@/components/boq/MatchList";
-import BoQNavigator from "@/components/boq/BoQNavigator";
 import AgentPanel from "@/components/agents/AgentPanel";
-import ChatDrawer from "@/components/chat/ChatDrawer";
 import PipelineBar from "@/components/layout/PipelineBar";
 import ColumnHeader from "@/components/layout/ColumnHeader";
-import PhotoUpload from "@/components/photos/PhotoUpload";
-import PhotoAnalysis from "@/components/photos/PhotoAnalysis";
 
-// ── Left Column Tabs ────────────────────────────────────────────────
-
-type LeftTab = "files" | "navigator" | "photos";
+// ── Agent Activity Button (inline) ──────────────────────────────────
 
 function AgentActivityButton() {
   const { events, isPanelOpen, togglePanel, activeAgents } = useAgentStore();
@@ -60,19 +56,7 @@ function AgentActivityButton() {
 
 export default function HomePage() {
   const { isConnected } = useWebSocket();
-  const { items, selectedRow, selectRow } = useBoQStore();
-  const [leftTab, setLeftTab] = useState<LeftTab>("files");
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [photoAnalysis, setPhotoAnalysis] = useState<{
-    imageUrl: string;
-    analysis: null | {
-      description: string;
-      matchedItems: string[];
-      progress: number;
-      confidence: number;
-    };
-    isLoading: boolean;
-  } | null>(null);
+  const { items } = useBoQStore();
 
   // ── Scroll synchronization between Current BOQ and Working Copy ──
   const boqScrollRef = useRef<HTMLDivElement>(null);
@@ -97,136 +81,33 @@ export default function HomePage() {
     requestAnimationFrame(() => { isSyncing.current = false; });
   }, []);
 
-  const handleAnalyzePhoto = useCallback((file: File) => {
-    const url = URL.createObjectURL(file);
-    setPhotoAnalysis({ imageUrl: url, analysis: null, isLoading: true });
-    // TODO: call backend vision agent API
-    setTimeout(() => {
-      setPhotoAnalysis({
-        imageUrl: url,
-        analysis: {
-          description: "Photo analysis will be available when connected to the vision agent.",
-          matchedItems: [],
-          progress: 0,
-          confidence: 0,
-        },
-        isLoading: false,
-      });
-    }, 2000);
-  }, []);
+  // ── Pipeline hooks ──────────────────────────────────────────────
+  useSelectionPipeline();
+  useRowAlignment(boqScrollRef, workingScrollRef);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
+      {/* Top bar (replaces sidebar) */}
+      <TopBar isConnected={isConnected} />
+
       {/* Pipeline bar */}
-      <div className="px-3 pt-3">
+      <div className="px-3 pt-2">
         <AnimatePresence>
           <PipelineBar />
         </AnimatePresence>
       </div>
 
-      {/* Connection status indicator */}
-      <div className="px-4 pt-2 flex items-center gap-2">
-        <span
-          className={`w-1.5 h-1.5 rounded-full ${isConnected ? "bg-status-success" : "bg-status-danger"}`}
-        />
-        <span className="text-[10px] text-text-muted font-mono uppercase tracking-wider">
-          {isConnected ? "Connected" : "Disconnected"}
-        </span>
-      </div>
-
       {/* Main four-column grid */}
-      <main className="flex-1 grid grid-cols-4 gap-3 p-3 min-h-0">
-        {/* ── Col 1: Upload + Files + Navigator ────────────────── */}
-        <div className="flex flex-col gap-3 min-h-0">
-          <UploadZone />
+      <main className="flex-1 grid grid-cols-[280px_280px_1fr_1fr] gap-3 p-3 min-h-0">
+        {/* Col 1: Chat panels */}
+        <ChatPanelList />
 
-          {/* Tab switcher */}
-          <div className="flex gap-1 px-1">
-            {[
-              { id: "files" as LeftTab, label: "Files" },
-              { id: "navigator" as LeftTab, label: "Navigator", icon: <TreePine className="w-3 h-3" /> },
-              { id: "photos" as LeftTab, label: "Photos", icon: <Camera className="w-3 h-3" /> },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setLeftTab(tab.id)}
-                className={`
-                  flex items-center gap-1 px-2 py-1 rounded text-xs transition-all duration-150
-                  ${leftTab === tab.id
-                    ? "bg-accent-cyan/10 text-accent-cyan border border-accent-cyan/20"
-                    : "text-text-muted hover:text-text-secondary hover:bg-bg-hover"
-                  }
-                `}
-              >
-                {tab.icon}
-                {tab.label}
-              </button>
-            ))}
-          </div>
+        {/* Col 2: Regex / deterministic results */}
+        <RegexResultList />
 
-          {/* Tab content */}
-          {leftTab === "files" && (
-            <div className="glass-panel p-3 flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto">
-              <ColumnHeader
-                title="Uploaded Files"
-                accent="cyan"
-                badge={`${useBoQStore.getState().files.length}`}
-              />
-              <FileList />
-            </div>
-          )}
-
-          {leftTab === "navigator" && (
-            <div className="glass-panel p-3 flex-1 min-h-0 overflow-y-auto">
-              <ColumnHeader title="BOQ Navigator" accent="cyan" />
-              <BoQNavigator
-                items={items}
-                selectedId={selectedRow?.id ?? null}
-                onSelect={(item) => selectRow(item)}
-              />
-            </div>
-          )}
-
-          {leftTab === "photos" && (
-            <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto">
-              <div className="glass-panel p-3">
-                <ColumnHeader title="Photo Analysis" accent="purple" />
-                <div className="mt-2">
-                  <PhotoUpload
-                    onAnalyze={handleAnalyzePhoto}
-                    isAnalyzing={photoAnalysis?.isLoading}
-                  />
-                </div>
-              </div>
-              {photoAnalysis && (
-                <div className="glass-panel p-3">
-                  <PhotoAnalysis
-                    imageUrl={photoAnalysis.imageUrl}
-                    analysis={photoAnalysis.analysis}
-                    isLoading={photoAnalysis.isLoading}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* ── Col 2: Match Details ─────────────────────────────── */}
+        {/* Col 3: Current BOQ */}
         <div className="glass-panel flex flex-col min-h-0">
-          <ColumnHeader title="Match Details" accent="purple" />
-          <div className="flex-1 overflow-y-auto p-2">
-            <MatchList />
-          </div>
-        </div>
-
-        {/* ── Col 3: Current BOQ ───────────────────────────────── */}
-        <div className="glass-panel flex flex-col min-h-0">
-          <ColumnHeader
-            title="Current BOQ"
-            accent="cyan"
-            badge={`${items.length} items`}
-          />
-          {/* Raw sheet preview (first 5 rows) */}
+          <ColumnHeader title="Current BOQ" accent="cyan" badge={`${items.length} items`} />
           <div className="shrink-0 p-2">
             <SheetPreview />
           </div>
@@ -235,23 +116,9 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* ── Col 4: Working Copy ──────────────────────────────── */}
+        {/* Col 4: Edited (Working Copy) */}
         <div className="glass-panel flex flex-col min-h-0">
-          <ColumnHeader
-            title="Working Copy"
-            accent="purple"
-            badge="editable"
-            actions={
-              selectedRow ? (
-                <button
-                  onClick={() => setIsChatOpen(true)}
-                  className="text-[10px] text-accent-purple hover:text-accent-cyan transition-colors px-2 py-0.5 rounded border border-border-default hover:border-accent-cyan/30"
-                >
-                  Chat
-                </button>
-              ) : undefined
-            }
-          />
+          <ColumnHeader title="Edited" accent="purple" badge="editable" />
           <div className="flex-1 min-h-0" onScroll={handleWorkingScroll}>
             <EditableSheet ref={workingScrollRef} />
           </div>
@@ -261,14 +128,6 @@ export default function HomePage() {
       {/* Agent activity floating button + panel */}
       <AgentActivityButton />
       <AgentPanel />
-
-      {/* Chat drawer */}
-      <ChatDrawer
-        itemId={selectedRow?.id ?? null}
-        item={selectedRow}
-        isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
-      />
     </div>
   );
 }
