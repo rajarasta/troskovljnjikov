@@ -14,7 +14,16 @@ import RegexResultList from "@/components/boq/RegexResultList";
 import SpreadsheetView from "@/components/spreadsheet/SpreadsheetView";
 import SheetPreview from "@/components/spreadsheet/SheetPreview";
 import RawSheetGrid from "@/components/spreadsheet/RawSheetGrid";
-import ExcelView from "@/components/spreadsheet/ExcelView";
+import dynamic from "next/dynamic";
+
+const ExcelView = dynamic(() => import("@/components/spreadsheet/ExcelView"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center h-full text-text-muted text-sm">
+      Loading Excel view...
+    </div>
+  ),
+});
 import AgentPanel from "@/components/agents/AgentPanel";
 import PipelineBar from "@/components/layout/PipelineBar";
 import ColumnHeader from "@/components/layout/ColumnHeader";
