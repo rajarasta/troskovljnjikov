@@ -1,0 +1,80 @@
+import React, { useState, useEffect, useRef } from 'react';
+import './spreadsheet.css'; // Link the new CSS file
+
+const columns = [
+  { key: 'id', label: 'ID' },
+  { key: 'file_id', label: 'File ID' },
+  { key: 'sheet_name', label: 'Sheet Name' },
+  { key: 'row', label: 'Row' },
+  { key: 'item_number', label: 'Item No.' },
+  { key: 'description', label: 'Description' }
+];
+
+const defaultWidths = [80, 120, 150, 60, 100, 200]; // px
+
+export default function SpreadsheetView({ items }) {
+  const [colWidths, setColWidths] = useState(defaultWidths);
+  const resizingIdx = useRef(null); // index of column being resized or null
+  const startX = useRef(0);
+  const initWidth = useRef(0);
+
+  const onMouseDown = (index) => (e) => {
+    e.preventDefault();
+    resizingIdx.current = index;
+    startX.current = e.clientX;
+    initWidth.current = colWidths[index];
+
+    const handleMove = (ev) => {
+      const delta = ev.clientX - startX.current;
+      setColWidths((prev) => {
+        const newW = [...prev];
+        newW[resizingIdx.current] = Math.max(50, initWidth.current + delta);
+        return newW;
+      });
+    };
+
+    const handleUp = () => {
+      document.removeEventListener('mousemove', handleMove);
+      document.removeEventListener('mouseup', handleUp);
+      resizingIdx.current = null;
+    };
+
+    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mouseup', handleUp);
+  };
+
+  // Prevent tab navigation while dragging to avoid script jumps.
+  useEffect(() => {
+    const keyHandler = (e) => {
+      if (resizingIdx.current !== null && e.key === 'Tab') {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    document.addEventListener('keydown', keyHandler);
+    return () => document.removeEventListener('keydown', keyHandler);
+  }, []);
+
+  // Add a class to the table for better handling of text wrapping
+  const tableStyle = {
+    borderCollapse: 'collapse',
+    width: '100%',
+    tableLayout: 'fixed'
+  };
+
+  // Override row height calculation - we'll set fixed heights or use responsive values based on content  
+  const getRowHeightForItem = (item) => {
+    // Calculate appropriate row height based on description length
+    if (!item || !item.description) return '40px';
+    
+    const descLength = item.description.length;
+    let minHeight = 40; // minimum height in pixels
+    
+    // Increase height for longer descriptions to ensure good readability  
+    if (descLength > 150) {
+      return `${Math.min(200, Math.max(minHeight, descLength / 3))}px`;
+    } else if (descLength > 80) {
+      return `${Math.min(140, Math.max(minHeight, descLength / 2.5))}px`;
+    }
+    
+    // For shorter descriptions, maintain a minimum height

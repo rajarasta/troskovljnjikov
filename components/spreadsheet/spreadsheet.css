@@ -1,0 +1,35 @@
+.spreadsheet-table {
+  table-layout: fixed;
+}
+
+.spreadsheet-table th,
+.spreadsheet-table td {
+  white-space: normal;
+  word-wrap: break-word;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  vertical-align: top; /* Ensure proper alignment of wrapped text */
+  box-sizing: border-box; /* Include padding and borders in element's total width/height */
+}
+
+/* Improve row height handling for better readability with full content visibility */
+.spreadsheet-table tbody tr {
+  min-height: 40px;
+  line-height: normal;
+  overflow-wrap: break-word;
+}
+
+/* Add specific styles to ensure long text is fully readable */
+.spreadsheet-table td {
+  /* Allow proper wrapping of content in cells for better readability */  
+  hyphens: auto; 
+  -ms-hyphens: auto;
+  -webkit-hyphens: auto;
+  word-wrap: break-word;
+}
+
+/* For description columns specifically, enhance visibility */
+.spreadsheet-table td.description-cell {
+  padding: 10px !important;
+  line-height: 1.4; /* Better spacing between lines in wrapped text */  
+}

@@ -10,9 +10,14 @@ The LLM backend is a local llama-server (GGUF model) exposed via OpenAI-compatib
 
 ## Commands
 
+All commands are run from the repo root.
+
 ```bash
 # Run everything (starts llama-server + Streamlit UI, cleans up on exit)
 ./run.sh
+
+# Run boq-matcher (rebuild frontend + start backend + frontend)
+.worktrees/boq-matcher/run.sh
 
 # Start LLM server manually
 LD_LIBRARY_PATH=./bin:$LD_LIBRARY_PATH ./bin/llama-server -m ./models/llama3.gguf -ngl 99 --parallel 4 --cont-batching --cache-reuse 512 --chat-template chatml
@@ -52,6 +57,28 @@ Active feature branches are developed in `.worktrees/` (gitignored). Each has it
 - `analyze_xlsx.py` — Standalone BoQ Excel file analyzer: detects headers, classifies row patterns (hierarchical/sequential/sparse), identifies format families across multiple files. Uses openpyxl. Hardcoded to scan `vanjski-podaci/primjeri-excel-ponuda/`.
 - `vanjski-podaci/` — External data directory (untracked) with sample Excel BoQ files and a `system_prompt_template.md` for Croatian BoQ extraction rules.
 - `docs/plans/` — Design and implementation plan documents.
+
+## BoQ Unit Taxonomy
+
+Croatian BoQ files contain 7 distinct row types. Understanding these is critical for parsing, indexing, and price history retrieval.
+
+| # | Type | Has Price? | Indexed in RAG? |
+|---|------|-----------|-----------------|
+| 1 | **Section Header** — e.g. "3.1.1. Hidroizolacija podova" | No | No |
+| 2 | **Simple Item** — position + description + unit + qty + price | Yes | Yes (own description) |
+| 3 | **Composite Unit** — parent description + sub-items (a, b, c…) with different units/prices | Sub-items only | Yes (parent description) |
+| 4 | **"Ne Nudimo" Item** — price = 0.00€, bidder declines to quote | Zero | Yes (flagged) |
+| 5 | **Subtotal Row** — "UKUPNO: 19,525.75€" | Sum only | No |
+| 6 | **Continuation Row** — multi-line description overflow | No | No (merged into parent) |
+| 7 | **Empty/Spacer Row** | No | No |
+
+**Composite Unit** is the key type for price history. Structure:
+- Parent row: position number + bold title + long shared description (may span multiple rows)
+- Sub-items (a, b, c…): each with DIFFERENT units (m², m, komad), quantities, and unit prices
+- Sub-item descriptions are short labels, only meaningful with parent context
+- UKUPNO subtotal row at the end
+
+The `item_type` column on `BoQItem` classifies each row: `simple`, `composite_sub`, `ne_nudimo`, `section_header`.
 
 ## Key Technical Details
 
