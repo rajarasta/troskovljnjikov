@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useBoQStore } from "@/stores/boqStore";
-import { useMatchStore } from "@/stores/matchStore";
+import { useSelectionStore } from "@/stores/selectionStore";
 import { fetchWorkbookData } from "@/lib/api";
+import type { BoQItem } from "@/lib/types";
 
 import { createUniver, LocaleType, mergeLocales } from "@univerjs/presets";
 import { UniverSheetsCorePreset } from "@univerjs/preset-sheets-core";
@@ -16,11 +17,13 @@ import "@univerjs/preset-sheets-drawing/lib/index.css";
 
 export default function ExcelView() {
   const selectedFileId = useBoQStore((s) => s.selectedFileId);
-  const startLookup = useMatchStore((s) => s.startLookup);
+  const addSelection = useSelectionStore((s) => s.addSelection);
+  const removeSelection = useSelectionStore((s) => s.removeSelection);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const univerRef = useRef<ReturnType<typeof createUniver> | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const excelSelectionIdRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,7 +86,7 @@ export default function ExcelView() {
           workbook.setEditable(false);
         }
 
-        // Listen for selection changes -> trigger RAG lookup (debounced)
+        // Listen for selection changes -> trigger pipeline via selectionStore (debounced)
         univerAPI.addEvent(univerAPI.Event.SelectionChanged, (params: unknown) => {
           const { worksheet, selections } = params as {
             worksheet: { getRange: (r: number, c: number) => { getValue: () => unknown } | null };
@@ -93,21 +96,51 @@ export default function ExcelView() {
 
           if (debounceRef.current) clearTimeout(debounceRef.current);
           debounceRef.current = setTimeout(() => {
-            const texts: string[] = [];
+            const cellData: Array<{ row: number; col: number; text: string }> = [];
             for (const sel of selections) {
               for (let r = sel.startRow; r <= sel.endRow; r++) {
                 for (let c = sel.startColumn; c <= sel.endColumn; c++) {
                   const cell = worksheet.getRange(r, c);
                   const value = cell?.getValue();
                   if (value != null && String(value).trim()) {
-                    texts.push(String(value).trim());
+                    cellData.push({ row: r, col: c, text: String(value).trim() });
                   }
                 }
               }
             }
-            if (texts.length > 0) {
-              startLookup(texts.join(" "));
+
+            if (cellData.length === 0) return;
+
+            // Remove previous Excel-originated selection
+            if (excelSelectionIdRef.current) {
+              removeSelection(excelSelectionIdRef.current);
+              excelSelectionIdRef.current = null;
             }
+
+            // Build synthetic BoQItems from cell data
+            const syntheticItems: BoQItem[] = cellData.map((cell) => ({
+              id: `excel-cell-${cell.row}-${cell.col}-${Date.now()}`,
+              file_id: selectedFileId!,
+              sheet_name: null,
+              row: cell.row,
+              item_number: null,
+              description: cell.text,
+              full_description: null,
+              parent_item_number: null,
+              unit: null,
+              quantity: 0,
+              unit_price: 0,
+              total: 0,
+              project_name: null,
+              date: null,
+            }));
+
+            const minRow = Math.min(...cellData.map((c) => c.row));
+            const maxRow = Math.max(...cellData.map((c) => c.row));
+
+            // Create selection -- triggers useSelectionPipeline
+            const selectionId = addSelection(minRow, maxRow, syntheticItems);
+            excelSelectionIdRef.current = selectionId;
           }, 500);
         });
 
@@ -127,12 +160,16 @@ export default function ExcelView() {
     return () => {
       disposed = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (excelSelectionIdRef.current) {
+        removeSelection(excelSelectionIdRef.current);
+        excelSelectionIdRef.current = null;
+      }
       if (univerRef.current) {
         univerRef.current.univerAPI.dispose();
         univerRef.current = null;
       }
     };
-  }, [selectedFileId, startLookup]);
+  }, [selectedFileId, addSelection, removeSelection]);
 
   if (!selectedFileId) {
     return (

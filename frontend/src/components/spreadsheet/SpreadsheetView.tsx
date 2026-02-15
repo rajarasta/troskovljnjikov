@@ -28,8 +28,6 @@ function buildParentSet(items: BoQItem[]): Set<string> {
 }
 
 // ── Selection color style maps ──────────────────────────────────────
-// Tailwind requires full class names at build time, so we map each
-// SelectionColor to its concrete active/inactive class strings.
 
 const ACTIVE_ROW_CLASSES: Record<SelectionColor, string> = {
   cyan: "bg-accent-cyan/15 border-l-2 border-l-accent-cyan",
@@ -69,10 +67,49 @@ const COLUMNS = [
   { key: "total", label: "Total", width: "100px", align: "right" as const },
 ] as const;
 
+// ── Editable cell ────────────────────────────────────────────────────
+
+function EditableCell({
+  value,
+  itemId,
+  field,
+}: {
+  value: number;
+  itemId: string;
+  field: "quantity" | "unit_price";
+}) {
+  const updateWorkingItem = useBoQStore((s) => s.updateWorkingItem);
+
+  const handleChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const parsed = parseFloat(e.target.value);
+      updateWorkingItem(itemId, { [field]: isNaN(parsed) ? 0 : parsed });
+    },
+    [itemId, field, updateWorkingItem],
+  );
+
+  return (
+    <input
+      type="number"
+      step="any"
+      value={value}
+      onChange={handleChange}
+      className="
+        w-full bg-transparent font-mono text-xs text-right text-text-primary
+        outline-none border border-transparent rounded px-1 py-0.5
+        hover:border-border-default focus:border-accent-purple focus:ring-1 focus:ring-accent-purple/30
+        transition-all duration-150
+        [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none
+      "
+    />
+  );
+}
+
 // ── Component ────────────────────────────────────────────────────────
 
 const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_props, ref) {
   const items = useBoQStore((s) => s.items);
+  const workingItems = useBoQStore((s) => s.workingItems);
 
   const selections = useSelectionStore((s) => s.selections);
   const activeSelectionId = useSelectionStore((s) => s.activeSelectionId);
@@ -83,8 +120,10 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
 
   const parentSet = useMemo(() => buildParentSet(items), [items]);
 
+  // Use workingItems for display (editable copy), fall back to items
+  const displayItems = workingItems.length > 0 ? workingItems : items;
+
   // Build a lookup map: row index -> { color, isActive } for highlighting.
-  // Later selections paint over earlier ones for overlapping rows.
   const selectionHighlightMap = useMemo(() => {
     const map = new Map<number, { color: SelectionColor; isActive: boolean }>();
     for (const sel of selections) {
@@ -101,13 +140,11 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
   const handleMouseDown = useCallback(
     (index: number, e: React.MouseEvent) => {
       if (e.shiftKey && dragAnchorIndex !== null) {
-        // Shift+click: create range from anchor to this row
         const start = Math.min(dragAnchorIndex, index);
         const end = Math.max(dragAnchorIndex, index);
         addSelection(start, end, items.slice(start, end + 1));
         setDragAnchor(null);
       } else {
-        // Normal click: set anchor for potential drag
         setDragAnchor(index);
       }
     },
@@ -117,14 +154,11 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
   const handleMouseUp = useCallback(
     (index: number) => {
       if (dragAnchorIndex !== null && dragAnchorIndex !== index) {
-        // Drag completed: create selection from anchor to this row
         const start = Math.min(dragAnchorIndex, index);
         const end = Math.max(dragAnchorIndex, index);
         addSelection(start, end, items.slice(start, end + 1));
         setDragAnchor(null);
       }
-      // If anchor === index, this is a single-row click.
-      // We create a single-row selection on click release.
       if (dragAnchorIndex !== null && dragAnchorIndex === index) {
         addSelection(index, index, items.slice(index, index + 1));
         setDragAnchor(null);
@@ -135,7 +169,6 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
 
   const handleSelectionClick = useCallback(
     (index: number) => {
-      // If the clicked row belongs to an existing selection, make it active
       for (const sel of selections) {
         if (index >= sel.startIndex && index <= sel.endIndex) {
           setActive(sel.id);
@@ -192,11 +225,16 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
 
         {/* ── Body ───────────────────────────────────────────────── */}
         <tbody>
-          {items.map((item, index) => {
+          {displayItems.map((item, index) => {
+            const originalItem = items[index];
             const highlight = selectionHighlightMap.get(index);
             const isParent =
               item.parent_item_number === null && item.item_number != null && parentSet.has(item.item_number);
             const isEvenRow = index % 2 === 0;
+
+            // Detect edits
+            const priceChanged = originalItem && item.unit_price !== originalItem.unit_price;
+            const totalChanged = originalItem && item.total !== originalItem.total;
 
             // Determine row classes based on selection state
             let rowClasses: string;
@@ -226,11 +264,11 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
                 `}
               >
                 {/* # */}
-                <td className="px-3 py-1.5 font-mono text-text-muted whitespace-nowrap">
+                <td className="px-3 py-1.5 font-mono text-text-muted whitespace-nowrap align-top">
                   {item.item_number}
                 </td>
 
-                {/* Description */}
+                {/* Description — full text, wrapping */}
                 <td
                   className={`px-3 py-1.5 whitespace-pre-wrap break-words ${
                     textColor || "text-text-primary"
@@ -239,24 +277,31 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
                   {item.description}
                 </td>
 
-                {/* Qty */}
-                <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">
-                  {item.quantity}
+                {/* Qty (editable) */}
+                <td className="px-1 py-0.5 align-top" onClick={(e) => e.stopPropagation()}>
+                  <EditableCell value={item.quantity} itemId={item.id} field="quantity" />
                 </td>
 
                 {/* Unit */}
-                <td className="px-3 py-1.5 text-text-muted whitespace-nowrap">
+                <td className="px-3 py-1.5 text-text-muted whitespace-nowrap align-top">
                   {item.unit}
                 </td>
 
-                {/* Unit Price */}
-                <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">
-                  {formatNumber(item.unit_price)}
+                {/* Unit Price (editable) */}
+                <td className="px-1 py-0.5 align-top" onClick={(e) => e.stopPropagation()}>
+                  <EditableCell value={item.unit_price} itemId={item.id} field="unit_price" />
+                  {priceChanged && originalItem && (
+                    <div className="text-[9px] text-accent-purple font-mono text-right px-1 -mt-0.5">
+                      was {originalItem.unit_price.toFixed(2)}
+                    </div>
+                  )}
                 </td>
 
-                {/* Total */}
+                {/* Total (auto-calculated) */}
                 <td
-                  className={`px-3 py-1.5 text-right font-mono whitespace-nowrap ${textColor}`}
+                  className={`px-3 py-1.5 text-right font-mono whitespace-nowrap align-top ${
+                    totalChanged ? "text-accent-purple" : textColor
+                  }`}
                 >
                   {formatNumber(item.total)}
                 </td>

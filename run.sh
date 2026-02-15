@@ -42,6 +42,20 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# ── 0. Kill stale processes on our ports ─────────────────────────────
+
+kill_port() {
+    local port=$1
+    if fuser "${port}/tcp" >/dev/null 2>&1; then
+        log "${RED}Killing stale process(es) on port ${port}...${RESET}"
+        fuser -k "${port}/tcp" >/dev/null 2>&1 || true
+        sleep 1
+    fi
+}
+
+kill_port "$FRONTEND_PORT"
+kill_port "$BACKEND_PORT"
+
 # ── 1. Start llama-server (if binary exists) ────────────────────────
 
 if [[ -x "$LLAMA_BIN" && -f "$LLAMA_MODEL" ]]; then
@@ -65,7 +79,25 @@ else
     log "${DIM}  Model:    ${LLAMA_MODEL}${RESET}"
 fi
 
-# ── 2. Start FastAPI backend ────────────────────────────────────────
+# ── 2. Install/sync backend dependencies ─────────────────────────────
+
+log "${PURPLE}Syncing backend dependencies...${RESET}"
+cd "$SCRIPT_DIR/backend"
+uv sync --quiet
+log "${GREEN}Backend dependencies synced.${RESET}"
+
+# ── 3. Install & build Next.js frontend ─────────────────────────────
+
+log "${CYAN}Installing frontend dependencies...${RESET}"
+cd "$SCRIPT_DIR/frontend"
+npm install --silent
+log "${GREEN}Frontend dependencies installed.${RESET}"
+
+log "${CYAN}Building Next.js frontend...${RESET}"
+npm run build
+log "${GREEN}Frontend built.${RESET}"
+
+# ── 4. Start FastAPI backend ────────────────────────────────────────
 
 log "${PURPLE}Starting FastAPI backend on port ${BACKEND_PORT}...${RESET}"
 cd "$SCRIPT_DIR/backend"
@@ -73,15 +105,15 @@ uv run uvicorn app.main:app \
     --host 0.0.0.0 \
     --port "$BACKEND_PORT" \
     --reload \
-    > /dev/null 2>&1 &
+    &
 PIDS+=($!)
 log "${GREEN}Backend started (PID ${PIDS[-1]})${RESET}"
 
-# ── 3. Start Next.js frontend ──────────────────────────────────────
+# ── 5. Start Next.js frontend (production) ──────────────────────────
 
 log "${CYAN}Starting Next.js frontend on port ${FRONTEND_PORT}...${RESET}"
 cd "$SCRIPT_DIR/frontend"
-npm run dev -- -p "$FRONTEND_PORT" > /dev/null 2>&1 &
+npm run start -- -p "$FRONTEND_PORT" &
 PIDS+=($!)
 log "${GREEN}Frontend started (PID ${PIDS[-1]})${RESET}"
 

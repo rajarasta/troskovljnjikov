@@ -515,7 +515,7 @@ def index_file(
                 if s.get("hasBOQData") and s.get("mapping"):
                     sheet_mappings[s["name"]] = s["mapping"]
 
-        PREVIEW_ROWS = 5
+        PREVIEW_ROWS = 10000  # capture all rows for native spreadsheet view
 
         items: list[dict[str, Any]] = []
         units: list[dict[str, Any]] = []

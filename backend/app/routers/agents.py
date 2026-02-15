@@ -16,11 +16,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.boq import BoQFile, BoQItem, Workbook
 from app.schemas.boq import BoQItemSchema, MatchResponse, MatchResult
-from app.services.boq_matcher import (
-    calculate_match_stats,
-    calculate_quantity_comparison,
-    find_similar_descriptions,
-)
+from app.services.rag import search as rag_search
 from app.ws.events import (
     AGENT_ERROR,
     AGENT_RESULT,
@@ -182,7 +178,7 @@ async def detect_columns(
         }
 
         # Try to extract JSON from the LLM response
-        response_text = result.data
+        response_text = result.output
         if isinstance(response_text, str):
             import json
             try:
@@ -249,28 +245,6 @@ async def match_all_items(
         {"agent": "batch_matcher", "workbook_id": req.workbook_id, "item_count": len(items_data)},
     )
 
-    # Load all historical items
-    all_historical = db.query(BoQItem).all()
-    historical_dicts: list[dict[str, Any]] = [
-        {
-            "id": item.id,
-            "fileId": item.file_id,
-            "sheetName": item.sheet_name,
-            "row": item.row,
-            "itemNumber": item.item_number,
-            "description": item.description,
-            "fullDescription": item.full_description,
-            "parentItemNumber": item.parent_item_number,
-            "unit": item.unit,
-            "quantity": item.quantity or 0,
-            "unitPrice": item.unit_price or 0,
-            "total": item.total or 0,
-            "projectName": item.project_name,
-            "date": item.date,
-        }
-        for item in all_historical
-    ]
-
     all_results: dict[str, Any] = {}
     matched_count = 0
 
@@ -282,29 +256,26 @@ async def match_all_items(
         item_id = item.get("id", str(idx))
 
         try:
-            matches = find_similar_descriptions(
-                query=description,
-                items=historical_dicts,
-                threshold=req.threshold,
-                max_results=req.max_results,
-            )
+            hits = rag_search(query_text=description, top_k=req.max_results)
+            matches = [h for h in hits if h["similarity"] >= req.threshold]
 
             if matches:
                 matched_count += 1
-                top_match = matches[0]
+                # Look up the top match item from DB for description/price
+                top_item = db.query(BoQItem).filter(BoQItem.id == matches[0]["id"]).first()
                 await emit(
                     MATCH_FOUND,
                     {
                         "item_id": item_id,
                         "match_count": len(matches),
-                        "top_similarity": top_match.get("similarity", 0),
+                        "top_similarity": matches[0]["similarity"],
                     },
                 )
                 all_results[item_id] = {
                     "match_count": len(matches),
-                    "top_similarity": top_match.get("similarity", 0),
-                    "top_description": top_match.get("description", ""),
-                    "top_unit_price": top_match.get("unitPrice", 0),
+                    "top_similarity": matches[0]["similarity"],
+                    "top_description": top_item.description if top_item else "",
+                    "top_unit_price": top_item.unit_price if top_item else 0,
                 }
 
         except Exception as exc:
@@ -359,48 +330,34 @@ async def suggest_price(
     )
 
     try:
-        # Find historical matches
-        all_historical = db.query(BoQItem).all()
-        historical_dicts: list[dict[str, Any]] = [
-            {
-                "id": item.id,
-                "description": item.description,
-                "fullDescription": item.full_description,
-                "unit": item.unit,
-                "quantity": item.quantity or 0,
-                "unitPrice": item.unit_price or 0,
-                "total": item.total or 0,
-                "projectName": item.project_name,
-                "date": item.date,
-            }
-            for item in all_historical
-        ]
-
-        matches = find_similar_descriptions(
-            query=req.description,
-            items=historical_dicts,
-            threshold=settings.MATCH_THRESHOLD,
-            max_results=10,
-        )
+        # Find historical matches via RAG
+        hits = rag_search(query_text=req.description, top_k=10)
+        hit_ids = [h["id"] for h in hits]
+        matched_items = {
+            item.id: item
+            for item in db.query(BoQItem).filter(BoQItem.id.in_(hit_ids)).all()
+        } if hit_ids else {}
 
         # Build context for the LLM
         match_context = ""
         prices: list[tuple[float, float]] = []  # (price, similarity)
-        if matches:
-            lines = []
-            for m in matches[:5]:
-                price = float(m.get("unitPrice", 0) or 0)
-                similarity = float(m.get("similarity", 0) or 0)
-                lines.append(
-                    f"- {m.get('description', 'N/A')} | "
-                    f"Unit: {m.get('unit', 'N/A')} | "
-                    f"Price: {price} | "
-                    f"Similarity: {similarity:.2f} | "
-                    f"Project: {m.get('projectName', 'N/A')}"
-                )
-                if price > 0 and similarity > 0:
-                    prices.append((price, similarity))
-            match_context = "\n".join(lines)
+        lines = []
+        for h in hits[:5]:
+            item = matched_items.get(h["id"])
+            if not item:
+                continue
+            price = float(item.unit_price or 0)
+            similarity = h["similarity"]
+            lines.append(
+                f"- {item.description} | "
+                f"Unit: {item.unit or 'N/A'} | "
+                f"Price: {price} | "
+                f"Similarity: {similarity:.2f} | "
+                f"Project: {item.project_name or 'N/A'}"
+            )
+            if price > 0 and similarity > 0:
+                prices.append((price, similarity))
+        match_context = "\n".join(lines)
 
         # Calculate a weighted average as a baseline
         if prices:
@@ -423,7 +380,7 @@ async def suggest_price(
         )
 
         result = await price_agent.run(prompt)
-        reasoning = result.data
+        reasoning = result.output
 
         # Use baseline as suggested price (LLM reasoning is supplementary)
         suggested_price = round(baseline, 2) if baseline > 0 else 0.0
@@ -508,7 +465,7 @@ async def analyze_photo(
         )
 
         result = await vision_agent.run(prompt)
-        analysis = result.data
+        analysis = result.output
 
         # Parse the response into structured output
         detected_items: list[str] = []

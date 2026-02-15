@@ -23,6 +23,7 @@ interface ChatPanelState {
   setSending: (panelId: string, sending: boolean) => void;
   setError: (panelId: string, error: string | null) => void;
   getPanelBySelection: (selectionId: string) => ChatPanel | undefined;
+  panelExists: (panelId: string) => boolean;
 }
 
 let panelCounter = 0;
@@ -64,6 +65,12 @@ export const useChatPanelStore = create<ChatPanelState>((set, get) => ({
   setActive: (panelId) => set({ activePanelId: panelId }),
 
   addMessage: (panelId, message) => {
+    if (!get().panels.some((p) => p.id === panelId)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[chatPanelStore] Attempted to add message to non-existent panel: ${panelId}`);
+      }
+      return;
+    }
     set((s) => ({
       panels: s.panels.map((p) =>
         p.id === panelId ? { ...p, messages: [...p.messages, message] } : p,
@@ -72,6 +79,12 @@ export const useChatPanelStore = create<ChatPanelState>((set, get) => ({
   },
 
   setAnalyzing: (panelId, analyzing) => {
+    if (!get().panels.some((p) => p.id === panelId)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[chatPanelStore] Attempted to set analyzing state on non-existent panel: ${panelId}`);
+      }
+      return;
+    }
     set((s) => ({
       panels: s.panels.map((p) =>
         p.id === panelId ? { ...p, isAnalyzing: analyzing } : p,
@@ -80,6 +93,12 @@ export const useChatPanelStore = create<ChatPanelState>((set, get) => ({
   },
 
   setSending: (panelId, sending) => {
+    if (!get().panels.some((p) => p.id === panelId)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[chatPanelStore] Attempted to set sending state on non-existent panel: ${panelId}`);
+      }
+      return;
+    }
     set((s) => ({
       panels: s.panels.map((p) =>
         p.id === panelId ? { ...p, isSending: sending } : p,
@@ -88,6 +107,12 @@ export const useChatPanelStore = create<ChatPanelState>((set, get) => ({
   },
 
   setError: (panelId, error) => {
+    if (!get().panels.some((p) => p.id === panelId)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[chatPanelStore] Attempted to set error on non-existent panel: ${panelId}`);
+      }
+      return;
+    }
     set((s) => ({
       panels: s.panels.map((p) =>
         p.id === panelId ? { ...p, error } : p,
@@ -97,5 +122,9 @@ export const useChatPanelStore = create<ChatPanelState>((set, get) => ({
 
   getPanelBySelection: (selectionId) => {
     return get().panels.find((p) => p.selectionId === selectionId);
+  },
+
+  panelExists: (panelId) => {
+    return get().panels.some((p) => p.id === panelId);
   },
 }));

@@ -89,7 +89,8 @@ export default function UploadZone() {
     [processFiles]
   );
 
-  const handleClick = useCallback(() => {
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
     if (!isLoading) {
       fileInputRef.current?.click();
     }

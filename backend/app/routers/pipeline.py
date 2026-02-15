@@ -15,11 +15,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.models.boq import BoQItem, Workbook
-from app.services.boq_matcher import (
-    calculate_match_stats,
-    find_similar_descriptions,
-)
-from app.services.matching_pipeline import MatchingPipeline
+from app.services.rag import search as rag_search
 from app.ws.events import (
     AGENT_ERROR,
     AGENT_PROGRESS,
@@ -114,28 +110,6 @@ async def _run_pipeline(pipeline_id: str) -> None:
         working_data: dict[str, Any] = workbook.working_data or {}
         items_data: list[dict[str, Any]] = working_data.get("items", [])
 
-        # Load all historical items for matching
-        all_historical = db.query(BoQItem).all()
-        historical_dicts: list[dict[str, Any]] = [
-            {
-                "id": item.id,
-                "fileId": item.file_id,
-                "sheetName": item.sheet_name,
-                "row": item.row,
-                "itemNumber": item.item_number,
-                "description": item.description,
-                "fullDescription": item.full_description,
-                "parentItemNumber": item.parent_item_number,
-                "unit": item.unit,
-                "quantity": item.quantity or 0,
-                "unitPrice": item.unit_price or 0,
-                "total": item.total or 0,
-                "projectName": item.project_name,
-                "date": item.date,
-            }
-            for item in all_historical
-        ]
-
         match_results: dict[str, Any] = {}
         matched_items: list[dict[str, Any]] = []
 
@@ -174,10 +148,6 @@ async def _run_pipeline(pipeline_id: str) -> None:
                 pipeline_id,
             )
 
-            # Build BM25 index once for all historical items
-            match_pipeline = MatchingPipeline()
-            match_pipeline.build_index(historical_dicts)
-
             for idx, item in enumerate(items_data):
                 description = item.get("description", "")
                 if not description or len(description) < 3:
@@ -192,31 +162,27 @@ async def _run_pipeline(pipeline_id: str) -> None:
                 )
 
                 try:
-                    matches = find_similar_descriptions(
-                        query=description,
-                        items=historical_dicts,
-                        threshold=settings.MATCH_THRESHOLD,
-                        max_results=settings.MAX_MATCH_RESULTS,
-                        pipeline=match_pipeline,
-                        query_unit=item.get("unit"),
-                        query_code=item.get("itemNumber"),
+                    hits = rag_search(
+                        query_text=description,
+                        top_k=settings.MAX_MATCH_RESULTS,
                     )
+                    matches = [h for h in hits if h["similarity"] >= settings.MATCH_THRESHOLD]
 
                     if matches:
-                        top_match = matches[0]
+                        top = matches[0]
+                        top_item = db.query(BoQItem).filter(BoQItem.id == top["id"]).first()
                         await emit(
                             MATCH_FOUND,
                             {
                                 "item_id": item_id,
                                 "match_count": len(matches),
-                                "top_similarity": top_match.get("similarity", 0),
-                                "top_description": top_match.get("description", ""),
+                                "top_similarity": top["similarity"],
+                                "top_description": top_item.description if top_item else "",
                             },
                             pipeline_id,
                         )
                         match_results[item_id] = {
                             "matches": matches[:5],
-                            "stats": calculate_match_stats(matches),
                         }
                         matched_items.append({**item, "_matches": matches[:5]})
 
@@ -273,7 +239,8 @@ async def _run_pipeline(pipeline_id: str) -> None:
                     # Simple price suggestion: weighted average from top matches
                     prices = []
                     for m in matches_for_item:
-                        price = float(m.get("unitPrice", 0) or 0)
+                        meta = m.get("metadata", {})
+                        price = float(meta.get("unit_price", 0) or 0)
                         similarity = float(m.get("similarity", 0) or 0)
                         if price > 0 and similarity > 0:
                             prices.append((price, similarity))

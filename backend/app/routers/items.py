@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -11,11 +13,7 @@ from app.schemas.boq import (
     MatchResponse,
     MatchResult,
 )
-from app.services.boq_matcher import (
-    calculate_match_stats,
-    calculate_quantity_comparison,
-    find_similar_descriptions,
-)
+from app.services.rag import search as rag_search
 
 router = APIRouter()
 
@@ -39,65 +37,77 @@ def match_items(
     req: MatchRequest,
     db: Session = Depends(get_db),
 ):
-    # Load all historical items from DB
-    all_items = db.query(BoQItem).all()
-
-    # Convert ORM objects to dicts for the matcher
-    item_dicts = []
-    for item in all_items:
-        item_dicts.append({
-            "id": item.id,
-            "fileId": item.file_id,
-            "sheetName": item.sheet_name,
-            "row": item.row,
-            "itemNumber": item.item_number,
-            "description": item.description,
-            "fullDescription": item.full_description,
-            "parentItemNumber": item.parent_item_number,
-            "unit": item.unit,
-            "quantity": item.quantity or 0,
-            "unitPrice": item.unit_price or 0,
-            "total": item.total or 0,
-            "projectName": item.project_name,
-            "date": item.date,
-        })
-
-    matches = find_similar_descriptions(
-        query=req.description,
-        items=item_dicts,
-        threshold=req.threshold,
-        max_results=req.max_results,
-        query_unit=req.unit,
-        query_code=req.item_number,
+    hits = rag_search(
+        query_text=req.description,
+        top_k=req.max_results,
     )
 
-    stats = calculate_match_stats(matches)
+    # Fetch full BoQItem records for each hit
+    hit_ids = [h["id"] for h in hits]
+    if not hit_ids:
+        return MatchResponse(matches=[], stats=_empty_stats())
 
-    results = []
-    for m in matches:
+    items_by_id = {
+        item.id: item
+        for item in db.query(BoQItem).filter(BoQItem.id.in_(hit_ids)).all()
+    }
+
+    results: list[MatchResult] = []
+    prices: list[float] = []
+    for hit in hits:
+        item = items_by_id.get(hit["id"])
+        if not item:
+            continue
+        similarity = hit["similarity"]
+        if similarity < req.threshold:
+            continue
+
         qty_comp = None
         if req.quantity is not None:
-            qty_comp = calculate_quantity_comparison(req.quantity, m.get("quantity", 0))
+            qty_comp = _quantity_comparison(req.quantity, item.quantity or 0)
 
         results.append(MatchResult(
-            item=BoQItemSchema(
-                id=m["id"],
-                file_id=m["fileId"],
-                sheet_name=m.get("sheetName"),
-                row=m["row"],
-                item_number=m.get("itemNumber"),
-                description=m["description"],
-                full_description=m.get("fullDescription"),
-                parent_item_number=m.get("parentItemNumber"),
-                unit=m.get("unit"),
-                quantity=m.get("quantity", 0),
-                unit_price=m.get("unitPrice", 0),
-                total=m.get("total", 0),
-                project_name=m.get("projectName"),
-                date=m.get("date"),
-            ),
-            similarity=m.get("similarity", 0),
+            item=BoQItemSchema.model_validate(item),
+            similarity=similarity,
             quantity_comparison=qty_comp,
         ))
+        if item.unit_price and item.unit_price > 0:
+            prices.append(item.unit_price)
 
+    stats = {
+        "count": len(results),
+        "avgPrice": sum(prices) / len(prices) if prices else 0,
+        "minPrice": min(prices) if prices else 0,
+        "maxPrice": max(prices) if prices else 0,
+        "priceRange": (max(prices) - min(prices)) if prices else 0,
+        "statusCounts": {},
+    }
     return MatchResponse(matches=results, stats=stats)
+
+
+def _empty_stats() -> dict[str, Any]:
+    return {
+        "count": 0, "avgPrice": 0, "minPrice": 0,
+        "maxPrice": 0, "priceRange": 0, "statusCounts": {},
+    }
+
+
+def _quantity_comparison(selected_qty: float, match_qty: float) -> dict[str, Any]:
+    if selected_qty == 0 and match_qty == 0:
+        return {"hasData": False, "label": "N/A", "color": "gray"}
+    if selected_qty == 0:
+        return {"hasData": True, "label": str(match_qty), "color": "blue"}
+    if match_qty == 0:
+        return {"hasData": True, "label": "No qty", "color": "gray"}
+    ratio = match_qty / selected_qty
+    pct = ((match_qty - selected_qty) / selected_qty) * 100.0
+    if 0.9 <= ratio <= 1.1:
+        color = "green"
+        label = "Same" if abs(pct) < 1 else f"{'+' if pct > 0 else ''}{pct:.0f}%"
+    elif 0.5 <= ratio <= 2.0:
+        color = "amber"
+        label = f"{'+' if pct > 0 else ''}{pct:.0f}%"
+    else:
+        color = "red"
+        label = f"{ratio * 100:.0f}%" if ratio < 1 else f"{ratio:.1f}x"
+    return {"hasData": True, "ratio": ratio, "percentDiff": pct, "label": label, "color": color}

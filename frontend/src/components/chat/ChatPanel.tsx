@@ -16,18 +16,28 @@ interface ChatPanelProps {
 export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
   const panel = useChatPanelStore((s) => s.panels.find((p) => p.id === panelId));
   const activePanelId = useChatPanelStore((s) => s.activePanelId);
-  const { removePanel, setActive, addMessage, setSending, setError } = useChatPanelStore();
+  const { setActive, addMessage, setSending, setError } = useChatPanelStore();
   const setSelectionActive = useSelectionStore((s) => s.setActive);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const prevActiveRef = useRef(false);
 
   const isActive = activePanelId === panelId;
 
   // Auto-scroll on new messages
   useEffect(() => {
-    if (isActive) {
+    if (isActive && panel?.messages.length) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [panel?.messages.length, isActive]);
+
+  // Auto-scroll when panel becomes active
+  useEffect(() => {
+    if (isActive && !prevActiveRef.current) {
+      // Panel just became active
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    prevActiveRef.current = isActive;
+  }, [isActive]);
 
   const handleClick = useCallback(() => {
     if (!panel) return;
@@ -38,8 +48,10 @@ export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
   const handleClose = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!panel) return;
-    removePanel(panelId);
-  }, [panelId, panel, removePanel]);
+    // Remove the associated selection - panel removal will be handled by useSelectionPipeline cleanup
+    const removeSelection = useSelectionStore.getState().removeSelection;
+    removeSelection(panel.selectionId);
+  }, [panel]);
 
   const handleSend = useCallback(async (content: string) => {
     if (!panel) return;

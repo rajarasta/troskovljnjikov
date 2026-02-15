@@ -132,7 +132,7 @@ async def send_chat_message(
     # Call the LLM
     try:
         result = await chat_agent.run(full_prompt)
-        assistant_content = result.data
+        assistant_content = result.output
     except Exception as exc:
         logger.exception("LLM call failed for chat item %s", item_id)
         assistant_content = f"Sorry, I encountered an error: {exc}"

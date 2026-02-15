@@ -13,13 +13,14 @@ type PopoverKey = "upload" | "files" | "navigator" | "photos" | null;
 export default function TopBar({ isConnected }: { isConnected: boolean }) {
   const [openPopover, setOpenPopover] = useState<PopoverKey>(null);
   const { items, selectedRow, selectRow } = useBoQStore();
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const filesCount = useBoQStore((s) => s.files.length);
+  const barRef = useRef<HTMLDivElement>(null);
   const [isAnalyzingPhoto, setIsAnalyzingPhoto] = useState(false);
 
-  // Close popover on outside click
+  // Close popover on click outside the entire top bar (buttons + popover)
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+      if (barRef.current && !barRef.current.contains(e.target as Node)) {
         setOpenPopover(null);
       }
     }
@@ -48,7 +49,7 @@ export default function TopBar({ isConnected }: { isConnected: boolean }) {
   `;
 
   return (
-    <div className="relative flex items-center gap-2 px-4 py-2 border-b border-border-default bg-bg-secondary/50">
+    <div ref={barRef} className="relative flex items-center gap-2 px-4 py-2 border-b border-border-default bg-bg-secondary/50">
       {/* Buttons */}
       <button onClick={() => toggle("upload")} className={buttonClass("upload")}>
         <Upload className="w-3.5 h-3.5" /> Upload
@@ -56,7 +57,7 @@ export default function TopBar({ isConnected }: { isConnected: boolean }) {
       <button onClick={() => toggle("files")} className={buttonClass("files")}>
         <FolderOpen className="w-3.5 h-3.5" /> Files
         <span className="text-[10px] text-text-muted">
-          ({useBoQStore.getState().files.length})
+          ({filesCount})
         </span>
       </button>
       <button onClick={() => toggle("navigator")} className={buttonClass("navigator")}>
@@ -83,10 +84,7 @@ export default function TopBar({ isConnected }: { isConnected: boolean }) {
 
       {/* Popover panel */}
       {openPopover && (
-        <div
-          ref={popoverRef}
-          className="absolute top-full left-0 mt-1 z-50 w-80 max-h-96 overflow-y-auto glass-panel border border-border-default rounded-lg shadow-xl p-3"
-        >
+        <div className="absolute top-full left-0 mt-1 z-50 w-80 max-h-96 overflow-y-auto glass-panel border border-border-default rounded-lg shadow-xl p-3">
           {openPopover === "upload" && <UploadZone />}
           {openPopover === "files" && <FileList />}
           {openPopover === "navigator" && (
