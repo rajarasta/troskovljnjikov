@@ -1,17 +1,64 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import settings
-from app.database import create_tables
+from app.database import create_tables, seed_default_presets
 from app.routers import upload, files, items, agents, chat, export, pipeline
 from app.ws.manager import manager
+
+logger = logging.getLogger(__name__)
+
+
+class CatchAllMiddleware:
+    """Raw ASGI middleware that catches unhandled exceptions.
+
+    Returns JSON 500 responses so CORSMiddleware (outer) can add CORS headers.
+    Only handles HTTP requests; passes through WebSocket/lifespan unchanged.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+        original_send = send
+
+        async def send_wrapper(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await original_send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception as exc:
+            logger.exception(
+                "Unhandled %s on %s %s",
+                type(exc).__name__,
+                scope.get("method", "?"),
+                scope.get("path", "?"),
+            )
+            if not response_started:
+                response = JSONResponse(
+                    status_code=500,
+                    content={"detail": f"Internal server error: {exc}"},
+                )
+                await response(scope, receive, original_send)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     create_tables()
+    seed_default_presets()
     yield
 
 
@@ -22,13 +69,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
+# Middleware stack (outermost first):
+# ServerErrorMiddleware -> CORSMiddleware -> CatchAllMiddleware -> ExceptionMiddleware -> Router
+#
+# Starlette's add_middleware() inserts at position 0, so the LAST call
+# becomes the OUTERMOST middleware. We need CORS outside CatchAll so that
+# error JSONResponses from CatchAll get CORS headers added by CORS.
+app.add_middleware(CatchAllMiddleware)      # inner: catches exceptions, returns JSON 500
+app.add_middleware(                         # outer: adds CORS headers to ALL responses
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 app.include_router(upload.router, prefix="/api", tags=["upload"])
 app.include_router(files.router, prefix="/api", tags=["files"])

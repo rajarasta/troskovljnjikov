@@ -1,0 +1,44 @@
+[
+  {
+    "id": "simple",
+    "name": "Jednostavni",
+    "description": "Standard 6-column BoQ",
+    "groups": ["core"],
+    "is_default": true
+  },
+  {
+    "id": "mat_rad",
+    "name": "Materijal + Rad",
+    "description": "Material/labor split pricing",
+    "groups": ["core", "mat_rad"],
+    "is_default": true
+  },
+  {
+    "id": "multi_zona",
+    "name": "Multi-zona",
+    "description": "Multiple quantity zones",
+    "groups": ["core", "multi_qty"],
+    "is_default": true
+  },
+  {
+    "id": "s_bilješkama",
+    "name": "S bilješkama",
+    "description": "Items with notes, drawings, LLM responses",
+    "groups": ["core", "annotation"],
+    "is_default": true
+  },
+  {
+    "id": "puni_pregled",
+    "name": "Puni pregled",
+    "description": "Full internal tracking",
+    "groups": ["core", "mat_rad", "annotation", "status", "meta"],
+    "is_default": true
+  },
+  {
+    "id": "mat_rad_bilješke",
+    "name": "Mat+Rad s bilješkama",
+    "description": "Labor split + annotation for review rounds",
+    "groups": ["core", "mat_rad", "annotation"],
+    "is_default": true
+  }
+]
