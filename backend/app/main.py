@@ -8,7 +8,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import settings
 from app.database import create_tables, seed_default_presets
-from app.routers import upload, files, items, agents, chat, export, pipeline
+from app.routers import upload, files, items, agents, chat, export, pipeline, presets
 from app.ws.manager import manager
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,7 @@ app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 app.include_router(chat.router, prefix="/api", tags=["chat"])
 app.include_router(export.router, prefix="/api", tags=["export"])
 app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
+app.include_router(presets.router, prefix="/api", tags=["presets"])
 
 
 @app.get("/api/health")
