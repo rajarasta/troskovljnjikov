@@ -43,6 +43,7 @@ async def upload_file(
         project_name=result["file"].get("projectName"),
         column_mapping=None,
         missing_data=result["file"].get("missingData"),
+        raw_preview=result["file"].get("rawPreview"),
         indexed_at=datetime.utcnow(),
     )
     db.add(db_file)

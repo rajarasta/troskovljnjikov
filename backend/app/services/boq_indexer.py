@@ -515,9 +515,12 @@ def index_file(
                 if s.get("hasBOQData") and s.get("mapping"):
                     sheet_mappings[s["name"]] = s["mapping"]
 
+        PREVIEW_ROWS = 5
+
         items: list[dict[str, Any]] = []
         units: list[dict[str, Any]] = []
         sheet_infos: list[dict[str, Any]] = []
+        raw_preview: dict[str, list[list[Any]]] = {}  # sheet_name -> first N rows
         missing_price_count = 0
         missing_quantity_count = 0
         missing_unit_count = 0
@@ -549,6 +552,16 @@ def index_file(
                     continue
 
             ws = wb[sheet_name]
+
+            # Capture first N raw rows for sheet preview
+            preview_rows: list[list[Any]] = []
+            for row_tuple in ws.iter_rows(min_row=1, max_row=PREVIEW_ROWS, max_col=21, values_only=True):
+                preview_rows.append([
+                    str(cell) if cell is not None else ""
+                    for cell in row_tuple
+                ])
+            raw_preview[sheet_name] = preview_rows
+
             ext_mapping = sheet_mappings.get(sheet_name)
             sheet_result = extract_items_from_sheet(
                 ws, file_name, file_path, sheet_name, file_date, ext_mapping,
@@ -590,6 +603,7 @@ def index_file(
                     "quantities": missing_quantity_count,
                     "units": missing_unit_count,
                 },
+                "rawPreview": raw_preview,
             },
             "items": items,
             "units": units,

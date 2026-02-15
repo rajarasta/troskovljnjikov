@@ -22,7 +22,7 @@ function buildTree(items: BoQItem[]): TreeNode[] {
 
   // Index all items by item_number
   for (const item of items) {
-    itemMap.set(item.item_number, item);
+    if (item.item_number) itemMap.set(item.item_number, item);
   }
 
   // Group children by parent_item_number
@@ -36,7 +36,7 @@ function buildTree(items: BoQItem[]): TreeNode[] {
 
   // Recursively build tree nodes
   function toNode(item: BoQItem): TreeNode {
-    const childItems = childrenMap.get(item.item_number) ?? [];
+    const childItems = (item.item_number ? childrenMap.get(item.item_number) : undefined) ?? [];
     return {
       item,
       children: childItems.map(toNode),

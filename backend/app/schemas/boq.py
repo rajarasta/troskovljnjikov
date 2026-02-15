@@ -17,6 +17,7 @@ class FileInfo(BaseModel):
     project_name: str | None
     item_count: int
     sheet_count: int
+    raw_preview: dict[str, list[list[str]]] | None = None
     indexed_at: datetime
 
     model_config = {"from_attributes": True}

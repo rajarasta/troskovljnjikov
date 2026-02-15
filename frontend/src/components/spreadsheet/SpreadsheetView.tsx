@@ -111,7 +111,7 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
           {items.map((item, index) => {
             const isSelected = selectedRow?.id === item.id;
             const isParent =
-              item.parent_item_number === null && parentSet.has(item.item_number);
+              item.parent_item_number === null && item.item_number != null && parentSet.has(item.item_number);
             const isEvenRow = index % 2 === 0;
 
             return (

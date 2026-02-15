@@ -33,13 +33,11 @@ export const useBoQStore = create<BoQState>((set, get) => ({
   uploadFile: async (file: File) => {
     set({ isLoading: true, error: null });
     try {
-      const uploaded = await api.uploadFile(file);
-      set((state) => ({
-        files: [...state.files, uploaded],
-        selectedFileId: uploaded.id,
-        isLoading: false,
-      }));
-      await get().loadItems(uploaded.id);
+      const { fileId } = await api.uploadFile(file);
+      // Reload full file list to get properly shaped FileInfo objects
+      const files = await api.fetchFiles();
+      set({ files, selectedFileId: fileId, isLoading: false });
+      await get().loadItems(fileId);
     } catch (err) {
       set({
         isLoading: false,

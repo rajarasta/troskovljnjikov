@@ -24,7 +24,14 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 
 // ── File operations ─────────────────────────────────────────────────
 
-export async function uploadFile(file: File): Promise<BoQFile> {
+interface UploadResponse {
+  file_id: string;
+  file_name: string;
+  sheets: unknown[];
+  item_count: number;
+}
+
+export async function uploadFile(file: File): Promise<{ fileId: string }> {
   const formData = new FormData();
   formData.append("file", file);
 
@@ -39,7 +46,8 @@ export async function uploadFile(file: File): Promise<BoQFile> {
     throw new Error(`Upload error ${res.status}: ${errorBody}`);
   }
 
-  return res.json() as Promise<BoQFile>;
+  const data = (await res.json()) as UploadResponse;
+  return { fileId: data.file_id };
 }
 
 export async function fetchFiles(): Promise<BoQFile[]> {

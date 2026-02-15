@@ -11,6 +11,7 @@ import UploadZone from "@/components/upload/UploadZone";
 import FileList from "@/components/upload/FileList";
 import SpreadsheetView from "@/components/spreadsheet/SpreadsheetView";
 import EditableSheet from "@/components/spreadsheet/EditableSheet";
+import SheetPreview from "@/components/spreadsheet/SheetPreview";
 import { MatchList } from "@/components/boq/MatchList";
 import BoQNavigator from "@/components/boq/BoQNavigator";
 import AgentPanel from "@/components/agents/AgentPanel";
@@ -225,6 +226,10 @@ export default function HomePage() {
             accent="cyan"
             badge={`${items.length} items`}
           />
+          {/* Raw sheet preview (first 5 rows) */}
+          <div className="shrink-0 p-2">
+            <SheetPreview />
+          </div>
           <div className="flex-1 min-h-0" onScroll={handleBoqScroll}>
             <SpreadsheetView ref={boqScrollRef} />
           </div>

@@ -11,8 +11,8 @@ interface QuantityGaugeProps {
  * The backend may send raw color names ("green", "amber", "red") or
  * hex values -- we normalise both to the theme's status palette.
  */
-function resolveBarColor(color: string): string {
-  const lower = color.toLowerCase();
+function resolveBarColor(color: string | undefined): string {
+  const lower = (color ?? "").toLowerCase();
   if (lower === "green" || lower.includes("success")) {
     return "var(--color-status-success)";
   }
@@ -24,14 +24,14 @@ function resolveBarColor(color: string): string {
   }
   // If the color is already a hex/rgb value, use it directly
   if (lower.startsWith("#") || lower.startsWith("rgb")) {
-    return color;
+    return color ?? "var(--color-accent-cyan)";
   }
   // Fallback to accent cyan
   return "var(--color-accent-cyan)";
 }
 
-function resolveTextClass(color: string): string {
-  const lower = color.toLowerCase();
+function resolveTextClass(color: string | undefined): string {
+  const lower = (color ?? "").toLowerCase();
   if (lower === "green" || lower.includes("success")) return "text-status-success";
   if (lower === "amber" || lower === "yellow" || lower.includes("warning")) return "text-status-warning";
   if (lower === "red" || lower.includes("danger")) return "text-status-danger";

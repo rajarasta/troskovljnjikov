@@ -13,8 +13,8 @@ import type { BoQFile } from "@/lib/types";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function getFileIcon(fileType: string) {
-  switch (fileType.toLowerCase()) {
+function getFileIcon(fileType: string | undefined) {
+  switch ((fileType ?? "").toLowerCase()) {
     case "xlsx":
     case "xls":
       return FileSpreadsheet;

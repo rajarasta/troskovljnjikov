@@ -4,26 +4,27 @@ export interface BoQFile {
   id: string;
   file_name: string;
   file_type: string;
-  project_name: string;
+  project_name: string | null;
   item_count: number;
   sheet_count: number;
+  raw_preview: Record<string, string[][]> | null;
   indexed_at: string;
 }
 
 export interface BoQItem {
   id: string;
   file_id: string;
-  sheet_name: string;
+  sheet_name: string | null;
   row: number;
-  item_number: string;
+  item_number: string | null;
   description: string;
-  full_description: string;
+  full_description: string | null;
   parent_item_number: string | null;
-  unit: string;
+  unit: string | null;
   quantity: number;
   unit_price: number;
   total: number;
-  project_name: string;
+  project_name: string | null;
   date: string | null;
 }
 

@@ -141,7 +141,7 @@ const EditableSheet = forwardRef<HTMLDivElement>(function EditableSheet(_props, 
             const originalItem = items[index];
             const isSelected = selectedRow?.id === wItem.id;
             const isParent =
-              wItem.parent_item_number === null && parentSet.has(wItem.item_number);
+              wItem.parent_item_number === null && wItem.item_number != null && parentSet.has(wItem.item_number);
             const isEvenRow = index % 2 === 0;
 
             // Detect if price was changed from original
