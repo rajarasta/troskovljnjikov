@@ -2,7 +2,7 @@ __pycache__/
 *.egg-info/
 .venv/
 bin/
-models/
+/models/
 .worktrees/
 node_modules/
 .next/

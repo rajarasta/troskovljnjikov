@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from app.database import get_db
 from app.models.boq import BoQFile, BoQItem, BoQUnit
 from app.schemas.boq import FileUploadResponse
 from app.services.boq_indexer import index_file
+from app.services.rag import index_items as rag_index_items
 
 router = APIRouter()
 
@@ -21,6 +23,12 @@ async def upload_file(
 ):
     file_bytes = await file.read()
     file_id = str(uuid.uuid4())
+
+    # Save original file to disk for Excel view
+    uploads_dir = Path("data/uploads")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    stored_path = uploads_dir / f"{file_id}.xlsx"
+    stored_path.write_bytes(file_bytes)
 
     result = index_file(
         file_path=file_id,
@@ -36,6 +44,7 @@ async def upload_file(
         id=file_id,
         file_name=file.filename or "unknown.xlsx",
         file_path=file_id,
+        stored_path=str(stored_path),
         file_type=(file.filename or "").rsplit(".", 1)[-1] if file.filename else "xlsx",
         file_date=datetime.utcnow(),
         sheet_count=result["file"]["sheetCount"],
@@ -88,6 +97,13 @@ async def upload_file(
         db.add(db_unit)
 
     db.commit()
+
+    # Index items into RAG for vector search
+    parent_map = {
+        u.get("parentItemNumber", ""): u.get("parentDescription") or u.get("parentTitle") or ""
+        for u in result.get("units", [])
+    }
+    rag_index_items(file_id, result["items"], parent_map)
 
     return FileUploadResponse(
         file_id=file_id,
