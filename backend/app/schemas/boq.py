@@ -79,7 +79,7 @@ class ChatRequest(BaseModel):
 
 
 class ChatMessageSchema(BaseModel):
-    id: int
+    id: str
     item_id: str
     role: str
     content: str
