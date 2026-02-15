@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.boq import BoQFile, BoQItem
 from app.schemas.boq import BoQItemSchema, FileInfo
+from app.services.workbook_converter import xlsx_to_workbook_data
 
 router = APIRouter()
 
@@ -58,3 +59,13 @@ def get_file_xlsx(file_id: str, db: Session = Depends(get_db)):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=f.file_name,
     )
+
+
+@router.get("/files/{file_id}/workbook-data")
+def get_workbook_data(file_id: str, db: Session = Depends(get_db)):
+    f = db.query(BoQFile).filter(BoQFile.id == file_id).first()
+    if not f:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not f.stored_path or not Path(f.stored_path).is_file():
+        raise HTTPException(status_code=404, detail="Original xlsx file not available")
+    return xlsx_to_workbook_data(f.stored_path)

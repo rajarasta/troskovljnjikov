@@ -3,19 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import { useBoQStore } from "@/stores/boqStore";
 import { useMatchStore } from "@/stores/matchStore";
-import { fetchXlsxFile } from "@/lib/api";
+import { fetchWorkbookData } from "@/lib/api";
 
 import { createUniver, LocaleType, mergeLocales } from "@univerjs/presets";
 import { UniverSheetsCorePreset } from "@univerjs/preset-sheets-core";
 import UniverPresetSheetsCoreEnUS from "@univerjs/preset-sheets-core/locales/en-US";
 import { UniverSheetsDrawingPreset } from "@univerjs/preset-sheets-drawing";
 import UniverPresetSheetsDrawingEnUS from "@univerjs/preset-sheets-drawing/locales/en-US";
-import { UniverSheetsAdvancedPreset } from "@univerjs/preset-sheets-advanced";
-import UniverPresetSheetsAdvancedEnUS from "@univerjs/preset-sheets-advanced/locales/en-US";
 
 import "@univerjs/preset-sheets-core/lib/index.css";
 import "@univerjs/preset-sheets-drawing/lib/index.css";
-import "@univerjs/preset-sheets-advanced/lib/index.css";
 
 export default function ExcelView() {
   const selectedFileId = useBoQStore((s) => s.selectedFileId);
@@ -48,8 +45,8 @@ export default function ExcelView() {
           containerRef.current.innerHTML = "";
         }
 
-        // Fetch the xlsx file
-        const file = await fetchXlsxFile(selectedFileId!);
+        // Fetch IWorkbookData from our backend
+        const workbookData = await fetchWorkbookData(selectedFileId!);
         if (disposed) return;
 
         // Create Univer instance
@@ -58,8 +55,7 @@ export default function ExcelView() {
           locales: {
             [LocaleType.EN_US]: mergeLocales(
               UniverPresetSheetsCoreEnUS,
-              UniverPresetSheetsDrawingEnUS,
-              UniverPresetSheetsAdvancedEnUS
+              UniverPresetSheetsDrawingEnUS
             ),
           },
           presets: [
@@ -67,7 +63,6 @@ export default function ExcelView() {
               container: containerRef.current!,
             }),
             UniverSheetsDrawingPreset(),
-            UniverSheetsAdvancedPreset(),
           ],
         });
 
@@ -79,16 +74,8 @@ export default function ExcelView() {
         univerRef.current = result;
         const { univerAPI } = result;
 
-        // Import the xlsx file
-        const snapshot = await univerAPI.importXLSXToSnapshotAsync(file);
-        if (disposed) {
-          univerAPI.dispose();
-          return;
-        }
-
-        if (snapshot) {
-          univerAPI.createWorkbook(snapshot);
-        }
+        // Create workbook directly from our data
+        univerAPI.createWorkbook(workbookData);
 
         // Set read-only mode
         const workbook = univerAPI.getActiveWorkbook();
@@ -97,8 +84,11 @@ export default function ExcelView() {
         }
 
         // Listen for selection changes -> trigger RAG lookup (debounced)
-        univerAPI.addEvent(univerAPI.Event.SelectionChanged, (params) => {
-          const { worksheet, selections } = params;
+        univerAPI.addEvent(univerAPI.Event.SelectionChanged, (params: unknown) => {
+          const { worksheet, selections } = params as {
+            worksheet: { getRange: (r: number, c: number) => { getValue: () => unknown } | null };
+            selections: Array<{ startRow: number; endRow: number; startColumn: number; endColumn: number }>;
+          };
           if (!selections || selections.length === 0 || !worksheet) return;
 
           if (debounceRef.current) clearTimeout(debounceRef.current);

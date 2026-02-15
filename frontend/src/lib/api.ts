@@ -163,14 +163,7 @@ export async function analyzeSelection(
 
 // ── Excel view operations ─────────────────────────────────────────
 
-/** Fetch original xlsx file as a File object for Univer import */
-export async function fetchXlsxFile(fileId: string): Promise<File> {
-  const res = await fetch(`${API_URL}/api/files/${fileId}/xlsx`);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch xlsx: ${res.status}`);
-  }
-  const blob = await res.blob();
-  return new File([blob], `${fileId}.xlsx`, {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
+/** Fetch IWorkbookData JSON for Univer rendering */
+export async function fetchWorkbookData(fileId: string): Promise<Record<string, unknown>> {
+  return fetchAPI<Record<string, unknown>>(`/api/files/${fileId}/workbook-data`);
 }
