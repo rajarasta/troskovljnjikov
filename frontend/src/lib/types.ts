@@ -86,3 +86,17 @@ export interface ChatMessage {
   content: string;
   created_at: string;
 }
+
+// ── Selection Models ────────────────────────────────────────────────
+
+export interface SelectionMatchRequest {
+  descriptions: string[];
+  quantities: number[];
+  threshold?: number;
+  max_results?: number;
+}
+
+export interface SelectionAnalysisRequest {
+  item_descriptions: string[];
+  match_context: MatchResult[];
+}

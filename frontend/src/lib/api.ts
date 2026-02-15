@@ -1,4 +1,4 @@
-import type { BoQFile, BoQItem, MatchResponse, ChatMessage } from "./types";
+import type { BoQFile, BoQItem, MatchResponse, ChatMessage, SelectionMatchRequest } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -125,5 +125,36 @@ export async function startPipeline(fileId: string): Promise<{ pipeline_id: stri
   return fetchAPI<{ pipeline_id: string }>("/api/pipeline/start", {
     method: "POST",
     body: JSON.stringify({ file_id: fileId }),
+  });
+}
+
+// ── Selection operations ──────────────────────────────────────────
+
+/** Match multiple items from a selection at once */
+export async function matchSelection(
+  request: SelectionMatchRequest,
+): Promise<MatchResponse> {
+  return fetchAPI<MatchResponse>("/api/match", {
+    method: "POST",
+    body: JSON.stringify({
+      description: request.descriptions.join("\n"),
+      quantity: request.quantities[0] ?? 0,
+      threshold: request.threshold ?? 0.3,
+      max_results: request.max_results ?? 20,
+    }),
+  });
+}
+
+/** Request LLM analysis for a selection */
+export async function analyzeSelection(
+  selectionId: string,
+  itemDescriptions: string[],
+  matchContext: string,
+): Promise<ChatMessage> {
+  return fetchAPI<ChatMessage>(`/api/chat/${selectionId}`, {
+    method: "POST",
+    body: JSON.stringify({
+      content: `[AUTO-ANALYSIS]\nSelected items:\n${itemDescriptions.join("\n")}\n\nMatch context:\n${matchContext}`,
+    }),
   });
 }
