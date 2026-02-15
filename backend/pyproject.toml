@@ -16,6 +16,7 @@ dependencies = [
     "websockets>=14.0",
     "alembic>=1.14.0",
     "reportlab>=4.0.0",
+    "rank-bm25>=0.2.2",
 ]
 
 [project.optional-dependencies]
