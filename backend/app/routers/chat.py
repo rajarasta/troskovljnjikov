@@ -90,8 +90,12 @@ async def send_chat_message(
     db: Session = Depends(get_db),
 ) -> ChatMessage:
     """Send a user message, run it through the LLM with item context, and return the assistant reply."""
-    # Load the item for context (optional - chat still works without it)
-    item = db.query(BoQItem).filter(BoQItem.id == item_id).first()
+    # For selection-based chats (e.g. "sel-1-1708012345"), skip DB item
+    # lookup — context is embedded in the message content by the frontend.
+    if item_id.startswith("sel-"):
+        item = None
+    else:
+        item = db.query(BoQItem).filter(BoQItem.id == item_id).first()
 
     # Build conversation history for the LLM
     history = (
