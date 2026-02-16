@@ -40,6 +40,7 @@ class BoQFile(Base):
     column_mapping = Column(JSON, nullable=True)
     missing_data = Column(JSON, nullable=True)
     raw_preview = Column(JSON, nullable=True)  # first N raw rows per sheet
+    date_source = Column(String, nullable=True)  # "filename" | "file_mtime" | "manual"
     indexed_at = Column(DateTime, default=datetime.utcnow)
 
     items = relationship("BoQItem", back_populates="file", cascade="all, delete-orphan")
@@ -64,6 +65,18 @@ class BoQItem(Base):
     unit_id = Column(String, ForeignKey("boq_units.id"), nullable=True)
     project_name = Column(String, nullable=True)
     date = Column(String, nullable=True)
+    item_type = Column(String, nullable=True)  # "simple" | "composite_sub" | "ne_nudimo" | "section_header"
+
+    # ── mat_rad fields ──
+    material_price = Column(Float, nullable=True)
+    labor_price = Column(Float, nullable=True)
+    material_total = Column(Float, nullable=True)
+    labor_total = Column(Float, nullable=True)
+
+    # ── annotation fields ──
+    notes = Column(Text, nullable=True)
+    drawing_path = Column(String, nullable=True)  # path to uploaded image
+    llm_response = Column(Text, nullable=True)
 
     file = relationship("BoQFile", back_populates="items")
     unit_ref = relationship("BoQUnit", foreign_keys=[unit_id])

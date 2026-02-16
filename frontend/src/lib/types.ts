@@ -26,6 +26,13 @@ export interface BoQItem {
   total: number;
   project_name: string | null;
   date: string | null;
+  material_price: number | null;
+  labor_price: number | null;
+  material_total: number | null;
+  labor_total: number | null;
+  notes: string | null;
+  drawing_path: string | null;
+  llm_response: string | null;
 }
 
 // ── Match Models ────────────────────────────────────────────────────
@@ -53,9 +60,18 @@ export interface MatchStats {
   statusCounts: Record<string, number>;
 }
 
+export interface MatchGroup {
+  sub_item: BoQItem;
+  matches: MatchResult[];
+  stats: MatchStats;
+}
+
 export interface MatchResponse {
   matches: MatchResult[];
   stats: MatchStats;
+  groups?: MatchGroup[] | null;
+  is_composite?: boolean;
+  parent_description?: string | null;
 }
 
 // ── Pipeline & Agent Models ─────────────────────────────────────────
@@ -85,6 +101,7 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
+  image_url?: string;
 }
 
 // ── Selection Models ────────────────────────────────────────────────
