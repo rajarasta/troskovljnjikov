@@ -33,6 +33,7 @@ export interface BoQItem {
   notes: string | null;
   drawing_path: string | null;
   llm_response: string | null;
+  file_name: string | null;
 }
 
 // ── Match Models ────────────────────────────────────────────────────
@@ -116,4 +117,14 @@ export interface SelectionMatchRequest {
 export interface SelectionAnalysisRequest {
   item_descriptions: string[];
   match_context: MatchResult[];
+}
+
+// ── Preset Models ──────────────────────────────────────────────────
+
+export interface Preset {
+  id: string;
+  name: string;
+  description: string;
+  groups: string[];
+  is_default: boolean;
 }

@@ -1,4 +1,4 @@
-import type { BoQFile, BoQItem, MatchResponse, ChatMessage, SelectionMatchRequest } from "./types";
+import type { BoQFile, BoQItem, MatchResponse, ChatMessage, Preset, SelectionMatchRequest } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -83,7 +83,10 @@ export async function fetchItems(
 export async function matchItems(
   description: string,
   quantity?: number,
-  threshold?: number
+  threshold?: number,
+  fileId?: string,
+  startRow?: number,
+  endRow?: number,
 ): Promise<MatchResponse> {
   return fetchAPI<MatchResponse>("/api/match", {
     method: "POST",
@@ -91,6 +94,9 @@ export async function matchItems(
       description,
       ...(quantity !== undefined && { quantity }),
       ...(threshold !== undefined && { threshold }),
+      ...(fileId !== undefined && { file_id: fileId }),
+      ...(startRow !== undefined && { start_row: startRow }),
+      ...(endRow !== undefined && { end_row: endRow }),
     }),
   });
 }
@@ -113,10 +119,66 @@ export async function sendChatMessage(
   });
 }
 
+export async function sendChatMessageWithImage(
+  itemId: string,
+  message: string,
+  image: File
+): Promise<ChatMessage> {
+  const formData = new FormData();
+  formData.append("message", message);
+  formData.append("image", image);
+
+  const url = `${API_URL}/api/chat/${itemId}/image`;
+  const res = await fetch(url, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "Unknown error");
+    throw new Error(`API error ${res.status}: ${errorBody}`);
+  }
+
+  return res.json() as Promise<ChatMessage>;
+}
+
 // ── Export operations ──────────────────────────────────────────────
 
 export function getExportUrl(fileId: string, format: "xlsx" | "pdf"): string {
   return `${API_URL}/api/export/${fileId}/${format}`;
+}
+
+export function getCanonicalExportUrl(
+  fileId: string,
+  presetId: string,
+  include: string[] = [],
+  exclude: string[] = [],
+): string {
+  const params = new URLSearchParams({ preset_id: presetId });
+  if (include.length) params.set("include", include.join(","));
+  if (exclude.length) params.set("exclude", exclude.join(","));
+  return `${API_URL}/api/export/${fileId}/xlsx?${params}`;
+}
+
+// ── Preset operations ──────────────────────────────────────────────
+
+export async function fetchPresets(): Promise<Preset[]> {
+  return fetchAPI<Preset[]>("/api/presets");
+}
+
+export async function createPreset(data: {
+  name: string;
+  description?: string;
+  groups: string[];
+}): Promise<Preset> {
+  return fetchAPI<Preset>("/api/presets", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deletePreset(presetId: string): Promise<void> {
+  await fetchAPI<void>(`/api/presets/${presetId}`, { method: "DELETE" });
 }
 
 // ── Pipeline operations ────────────────────────────────────────────
@@ -166,4 +228,23 @@ export async function analyzeSelection(
 /** Fetch IWorkbookData JSON for Univer rendering */
 export async function fetchWorkbookData(fileId: string): Promise<Record<string, unknown>> {
   return fetchAPI<Record<string, unknown>>(`/api/files/${fileId}/workbook-data`);
+}
+
+// ── Inline completion ────────────────────────────────────────────────
+
+interface CompletionContext {
+  item_number: string | null;
+  description: string;
+}
+
+export async function suggestCompletion(
+  prefix: string,
+  context: CompletionContext[],
+  signal?: AbortSignal,
+): Promise<{ suggestion: string }> {
+  return fetchAPI<{ suggestion: string }>("/api/suggest/complete", {
+    method: "POST",
+    body: JSON.stringify({ prefix, context }),
+    signal,
+  });
 }
