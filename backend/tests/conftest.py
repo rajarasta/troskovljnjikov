@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
+from app.models.preset import Preset
 
 # Resolve to the main repo's sample data (works from worktree too)
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,8 +40,19 @@ def db_session():
         Base.metadata.drop_all(bind=engine)
 
 
+def _seed_default_presets(session):
+    """Seed default presets into the test database."""
+    data_path = Path(__file__).resolve().parent.parent / "app" / "data" / "default_presets.json"
+    presets = json.loads(data_path.read_text())
+    for p in presets:
+        session.add(Preset(**p))
+    session.commit()
+
+
 @pytest.fixture
 def client(db_session):
+    _seed_default_presets(db_session)
+
     def override_get_db():
         try:
             yield db_session
