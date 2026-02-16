@@ -1,14 +1,16 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import settings
 from app.database import create_tables, seed_default_presets
-from app.routers import upload, files, items, agents, chat, export, pipeline, presets
+from app.routers import upload, files, items, agents, chat, export, pipeline, presets, completion
 from app.ws.manager import manager
 
 logger = logging.getLogger(__name__)
@@ -93,6 +95,11 @@ app.include_router(chat.router, prefix="/api", tags=["chat"])
 app.include_router(export.router, prefix="/api", tags=["export"])
 app.include_router(pipeline.router, prefix="/api", tags=["pipeline"])
 app.include_router(presets.router, prefix="/api", tags=["presets"])
+app.include_router(completion.router, prefix="/api", tags=["completion"])
+
+# Static file serving for uploaded drawings (must come AFTER router registrations)
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 @app.get("/api/health")
