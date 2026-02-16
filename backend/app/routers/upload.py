@@ -12,7 +12,7 @@ from app.database import get_db
 from app.models.boq import BoQFile, BoQItem, BoQUnit
 from app.schemas.boq import FileUploadResponse
 from app.services.autopilot import run_autopilot
-from app.services.boq_indexer import index_file
+from app.services.indexer import index_file
 from app.services.rag import index_items as rag_index_items, index_for_search
 
 router = APIRouter()

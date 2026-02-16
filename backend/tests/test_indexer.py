@@ -4,7 +4,7 @@ from datetime import datetime
 
 import pytest
 
-from app.services.boq_indexer import index_file, detect_columns, find_best_header_row
+from app.services.indexer import index_file, detect_columns, find_best_header_row
 
 
 def test_detect_columns_croatian_headers():

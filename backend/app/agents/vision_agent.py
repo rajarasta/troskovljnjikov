@@ -18,6 +18,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.config import settings
+from app.services.llm_settings import run_with_settings
 
 # ---------------------------------------------------------------------------
 # Pydantic models for structured output
@@ -156,5 +157,5 @@ async def analyze_site_photo(
         f"![site photo](data:image/jpeg;base64,{b64_string})"
     )
 
-    result = await vision_agent.run("\n".join(prompt_parts))
+    result = await run_with_settings("vision", vision_agent, "\n".join(prompt_parts))
     return result.output

@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.database import Base, SessionLocal, create_tables, engine
 from app.models.boq import BoQFile, BoQItem, BoQUnit
-from app.services.boq_indexer import index_file, resolve_file_date
+from app.services.indexer import index_file, resolve_file_date
 from app.services.rag import delete_all as rag_delete_all, index_for_search
 
 

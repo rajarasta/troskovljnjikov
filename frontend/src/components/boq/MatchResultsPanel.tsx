@@ -7,6 +7,7 @@ import { useMatchStore } from "@/stores/matchStore";
 import { formatNumber } from "@/lib/boqTableConfig";
 import ColumnHeader from "@/components/layout/ColumnHeader";
 import MatchResultsTable from "./MatchResultsTable";
+import SelectionPreviewTable from "./SelectionPreviewTable";
 
 
 export default function MatchResultsPanel() {
@@ -41,34 +42,14 @@ export default function MatchResultsPanel() {
     <div className="flex flex-col gap-2 h-full min-h-0">
       {/* Panel 1: Selection preview */}
       {hasSelection && (
-        <div className="glass-panel flex flex-col min-h-0 shrink-0 max-h-[50%] overflow-hidden">
+        <div className="glass-panel flex flex-col h-auto shrink-0 overflow-hidden">
           <ColumnHeader
             title="Odabir"
             accent="cyan"
             badge={`${activeSelection.items.length}`}
           />
-          <div className="flex-1 overflow-y-auto min-h-0 px-2.5 py-1.5">
-            {activeSelection.items.map((item) => {
-              const desc = item.description?.trim();
-              if (!desc) return null;
-              const hasQty = item.quantity != null && item.quantity > 0;
-              const hasPrice = item.unit_price != null && item.unit_price > 0;
-              return (
-                <div key={item.id} className="flex items-baseline gap-1.5 text-[11px] leading-snug py-0.5">
-                  {item.item_number && (
-                    <span className="font-mono text-text-muted shrink-0">{item.item_number}</span>
-                  )}
-                  <span className="text-text-primary truncate">{desc}</span>
-                  {(hasQty || item.unit || hasPrice) && (
-                    <span className="text-text-muted shrink-0 ml-auto font-mono">
-                      {hasQty ? formatNumber(item.quantity) : ""}
-                      {item.unit ? ` ${item.unit}` : ""}
-                      {hasPrice ? ` @ ${formatNumber(item.unit_price)}` : ""}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+          <div className="overflow-x-auto">
+            <SelectionPreviewTable items={activeSelection.items} color={activeSelection.color} />
           </div>
         </div>
       )}

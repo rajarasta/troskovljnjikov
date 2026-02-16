@@ -10,6 +10,7 @@ from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.config import settings
+from app.services.llm_settings import run_with_settings
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +96,9 @@ async def suggest_completion(req: CompletionRequest):
     full_prompt = "\n".join(prompt_parts)
 
     try:
-        result = await completion_agent.run(
-            full_prompt,
-            model_settings={"max_tokens": 80},
+        result = await run_with_settings(
+            "completion", completion_agent, full_prompt,
+            extra_model_settings={"max_tokens": 80},
         )
         suggestion = _strip_prefix_echo(req.prefix, result.output)
         return CompletionResponse(suggestion=suggestion)

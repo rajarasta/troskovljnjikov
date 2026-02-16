@@ -30,11 +30,14 @@ interface AutopilotState {
     low_confidence: number;
   }>;
 
+  // Errors
+  errors: Record<string, string>;
+
   // Actions
   appendSummaryToken: (fileId: string, token: string, done: boolean) => void;
   setProgress: (fileId: string, current: number, total: number) => void;
   setStatus: (fileId: string, status: AutopilotStatus) => void;
-  addMatchResult: (fileId: string, itemId: string, matchCount: number, topSimilarity: number, confidence: ConfidenceTier) => void;
+  addMatchResult: (fileId: string, itemId: string, confidence: ConfidenceTier) => void;
   addPriceSuggestion: (fileId: string, itemId: string, suggestion: PriceSuggestion) => void;
   setComplete: (fileId: string, stats: AutopilotState["completionStats"][string]) => void;
   setError: (fileId: string, error: string) => void;
@@ -48,6 +51,7 @@ interface AutopilotState {
 export const useAutopilotStore = create<AutopilotState>((set, get) => ({
   status: {},
   progress: {},
+  errors: {},
   matchCache: {},
   priceCache: {},
   confidences: {},
@@ -78,7 +82,7 @@ export const useAutopilotStore = create<AutopilotState>((set, get) => ({
     }));
   },
 
-  addMatchResult: (fileId, itemId, _matchCount, _topSimilarity, confidence) => {
+  addMatchResult: (fileId, itemId, confidence) => {
     set((s) => ({
       confidences: {
         ...s.confidences,
@@ -103,9 +107,10 @@ export const useAutopilotStore = create<AutopilotState>((set, get) => ({
     }));
   },
 
-  setError: (fileId, _error) => {
+  setError: (fileId, error) => {
     set((s) => ({
       status: { ...s.status, [fileId]: "error" },
+      errors: { ...s.errors, [fileId]: error },
     }));
   },
 

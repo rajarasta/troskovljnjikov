@@ -15,6 +15,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.config import settings
+from app.services.llm_settings import run_with_settings
 
 # ---------------------------------------------------------------------------
 # Pydantic models for structured output
@@ -205,7 +206,8 @@ async def suggest_price(
         historical_prices=hp_list,
     )
 
-    result = await pricer_agent.run(
+    result = await run_with_settings(
+        "pricer", pricer_agent,
         "Suggest a unit price for this BOQ item based on the historical data provided.",
         deps=deps,
     )

@@ -19,6 +19,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.config import settings
 from app.database import SessionLocal
+from app.services.llm_settings import run_stream_with_settings
 from app.models.boq import ChatMessage
 from app.services.rag import search as rag_search
 from app.ws.events import (
@@ -219,7 +220,7 @@ async def _run_summary(
 
     try:
         accumulated_text = ""
-        async with _summary_agent.run_stream(prompt) as stream:
+        async with await run_stream_with_settings("autopilot_summary", _summary_agent, prompt) as stream:
             async for token in stream.stream_text(delta=True):
                 accumulated_text += token
                 await emit(AUTOPILOT_SUMMARY_TOKEN, {

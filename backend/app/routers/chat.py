@@ -15,6 +15,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.boq import BoQItem, ChatMessage
 from app.schemas.boq import ChatMessageSchema, ChatRequest
+from app.services.llm_settings import run_with_settings, run_stream_with_settings
 from app.ws.events import CHAT_TOKEN, CHAT_COMPLETE, emit
 
 logger = logging.getLogger(__name__)
@@ -134,7 +135,7 @@ async def send_chat_message(
 
         # Call the LLM
         try:
-            result = await chat_agent.run(full_prompt)
+            result = await run_with_settings("chat", chat_agent, full_prompt)
             assistant_content = result.output
         except Exception as exc:
             logger.exception("LLM call failed for chat item %s", item_id)
@@ -206,7 +207,7 @@ async def send_chat_message_with_image(
 
         # Call the LLM
         try:
-            result = await chat_agent.run(full_prompt)
+            result = await run_with_settings("chat", chat_agent, full_prompt)
             assistant_content = result.output
         except Exception as exc:
             logger.exception("LLM call failed for chat item %s (with image)", item_id)
@@ -268,7 +269,7 @@ async def send_chat_message_stream(
         # Stream the LLM response
         accumulated = ""
         try:
-            async with chat_agent.run_stream(full_prompt) as stream:
+            async with await run_stream_with_settings("chat", chat_agent, full_prompt) as stream:
                 async for token in stream.stream_text(delta=True):
                     accumulated += token
                     await emit(CHAT_TOKEN, {

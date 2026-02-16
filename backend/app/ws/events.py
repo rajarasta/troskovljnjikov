@@ -21,6 +21,8 @@ AGENT_SPAWN = "agent:spawn"
 AGENT_PROGRESS = "agent:progress"
 AGENT_RESULT = "agent:result"
 AGENT_ERROR = "agent:error"
+AGENT_RUN_START = "agent:run_start"
+AGENT_RUN_END = "agent:run_end"
 
 # Domain events
 MATCH_FOUND = "match:found"

@@ -106,6 +106,13 @@ export const useMatchStore = create<MatchState>((set, get) => ({
   },
 
   setCachedResults: (selectionId, matches, stats) => {
+    // Guard: ignore if selection was removed while WS/pipeline was in flight
+    if (!(selectionId in get().resultsBySelection)) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn(`[matchStore] setCachedResults for unknown selection: ${selectionId}`);
+      }
+      return;
+    }
     const prices = matches
       .map((m) => m.item.unit_price)
       .filter((p) => p > 0);

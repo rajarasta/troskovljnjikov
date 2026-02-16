@@ -10,7 +10,7 @@ MAIN_REPO="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd || echo "$SCRIPT_DIR")"
 
 # ── Config ───────────────────────────────────────────────────────────
 
-LLM_PORT=8080
+LLM_PORT=8095
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
 

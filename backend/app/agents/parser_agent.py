@@ -17,6 +17,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.config import settings
+from app.services.llm_settings import run_with_settings
 
 # ---------------------------------------------------------------------------
 # Pydantic models for structured output
@@ -196,5 +197,5 @@ async def detect_columns_with_llm(
         f"{sample_text}"
     )
 
-    result = await parser_agent.run(prompt)
+    result = await run_with_settings("parser", parser_agent, prompt)
     return result.output

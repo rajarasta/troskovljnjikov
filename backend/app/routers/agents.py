@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
+from app.services.llm_settings import run_with_settings
 from app.models.boq import BoQFile, BoQItem, Workbook
 from app.schemas.boq import BoQItemSchema, MatchResponse, MatchResult
 from app.services.rag import search as rag_search
@@ -165,7 +166,7 @@ async def detect_columns(
             + "\n\nReturn a JSON object with column names as keys and 0-based indices as values."
         )
 
-        result = await column_detect_agent.run(prompt)
+        result = await run_with_settings("column_detect", column_detect_agent, prompt)
 
         # Parse the LLM response - use a basic mapping if parsing fails
         column_mapping = {
@@ -379,7 +380,7 @@ async def suggest_price(
             "Suggest a fair unit price and explain briefly."
         )
 
-        result = await price_agent.run(prompt)
+        result = await run_with_settings("pricer", price_agent, prompt)
         reasoning = result.output
 
         # Use baseline as suggested price (LLM reasoning is supplementary)
@@ -464,7 +465,7 @@ async def analyze_photo(
             "materials, and work activities."
         )
 
-        result = await vision_agent.run(prompt)
+        result = await run_with_settings("vision", vision_agent, prompt)
         analysis = result.output
 
         # Parse the response into structured output

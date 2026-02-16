@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.routers.items import _process_hits, _build_stats
+from app.services.match_service import process_hits, build_stats
 from app.schemas.boq import MatchResponse
 from app.services.autopilot import (
     get_all_cached_matches,
@@ -55,5 +55,5 @@ def autopilot_matches_resolved(
     if cached is None:
         raise HTTPException(status_code=404, detail="No cached matches for this item")
 
-    results, prices = _process_hits(cached, settings.MATCH_THRESHOLD, quantity or None, db)
-    return MatchResponse(matches=results, stats=_build_stats(prices))
+    results, prices = process_hits(cached, settings.MATCH_THRESHOLD, quantity or None, db)
+    return MatchResponse(matches=results, stats=build_stats(prices))

@@ -41,7 +41,7 @@ class GameState:
     total_guesses: int = 0
 
 
-provider = OpenAIProvider(base_url="http://localhost:8080/v1")
+provider = OpenAIProvider(base_url="http://localhost:8095/v1")
 model = OpenAIChatModel(model_name="llama3", provider=provider)
 
 
