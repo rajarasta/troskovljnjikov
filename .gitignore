@@ -6,3 +6,5 @@ bin/
 .worktrees/
 node_modules/
 .next/
+dist/
+backend/data/

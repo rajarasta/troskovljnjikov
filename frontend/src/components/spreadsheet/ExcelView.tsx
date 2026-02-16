@@ -133,6 +133,14 @@ export default function ExcelView() {
               total: 0,
               project_name: null,
               date: null,
+              material_price: null,
+              labor_price: null,
+              material_total: null,
+              labor_total: null,
+              notes: null,
+              drawing_path: null,
+              llm_response: null,
+              file_name: null,
             }));
 
             const minRow = Math.min(...cellData.map((c) => c.row));
