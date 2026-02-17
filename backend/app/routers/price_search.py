@@ -207,6 +207,20 @@ async def trigger_price_search(
     return {"status": "started", "item_id": item_id}
 
 
+def _is_valid_description(description: str) -> bool:
+    """Check if description is specific enough for meaningful search."""
+    if not description or len(description.strip()) < 5:
+        return False
+    # Reject generic placeholders
+    generic_patterns = [
+        "spreadsheet cell",
+        "row ",
+        "col ",
+    ]
+    desc_lower = description.lower()
+    return not any(pattern in desc_lower for pattern in generic_patterns)
+
+
 async def _run_search_task(
     item_id: str,
     description: str,
@@ -218,6 +232,17 @@ async def _run_search_task(
 ) -> None:
     """Background task that runs the price search agent and emits WS events."""
     try:
+        # Validate description before searching
+        if not _is_valid_description(description):
+            logger.warning(f"Skipping search for {item_id}: description too generic ({description!r})")
+            _status_cache[item_id] = "error"
+            await emit(SEARCH_COMPLETE, {
+                "item_id": item_id,
+                "error": f"Description too generic for meaningful search: '{description}'",
+                "search_log": ["Description validation failed"],
+            })
+            return
+
         rules = PricingRules(
             include_vat=include_vat,
             include_shipping=include_shipping,
