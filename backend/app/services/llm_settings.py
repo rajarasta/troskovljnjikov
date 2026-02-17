@@ -502,12 +502,22 @@ async def run_with_settings(
     success = True
     try:
         if prompt_changed or model_changed:
+            # When model or prompt changes, create a new agent with updated settings
+            # IMPORTANT: Copy all tools from the original agent!
             tmp_agent = Agent(
                 model=current_model,
                 system_prompt=composed_prompt if prompt_changed else agent._system_prompts[0] if hasattr(agent, '_system_prompts') and agent._system_prompts else "",
                 output_type=agent._output_type if hasattr(agent, '_output_type') else str,
                 retries=agent._max_result_retries if hasattr(agent, '_max_result_retries') else 1,
             )
+
+            # Copy tools from original agent to temporary agent
+            if hasattr(agent, '_tools') and agent._tools:
+                tmp_agent._tools = agent._tools
+            if hasattr(agent, '_tool_parser') and agent._tool_parser:
+                tmp_agent._tool_parser = agent._tool_parser
+
+            logger.info(f"Created temporary agent for {agent_id} with model {current_model}")
             return await tmp_agent.run(prompt, model_settings=model_settings, **kwargs)
 
         return await agent.run(prompt, model_settings=model_settings, **kwargs)

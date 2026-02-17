@@ -163,14 +163,26 @@ Important:
 - PDV = VAT (25% in Croatia), most prices include PDV\
 """
 
-search_agent = Agent(
-    _model,
-    output_type=SearchResult,
-    deps_type=SearchDeps,
-    system_prompt=SYSTEM_PROMPT,
-    retries=2,
-    model_settings={"temperature": 0.1},
-)
+# Don't create at module level - will be created dynamically with current model
+# search_agent = Agent(...)
+
+def _build_search_agent() -> Agent:
+    """Create search agent with the current dynamically selected model."""
+    current_model = get_model()
+    logger.debug(f"Building search_agent with model: {current_model}")
+    agent = Agent(
+        current_model,
+        output_type=SearchResult,
+        deps_type=SearchDeps,
+        system_prompt=SYSTEM_PROMPT,
+        retries=2,
+        model_settings={"temperature": 0.1},
+    )
+    return agent
+
+
+# Create agent template to register instructions and tools on
+search_agent = _build_search_agent()
 
 
 @search_agent.instructions
@@ -426,7 +438,9 @@ async def run_price_search(
         Structured result with quotes, best quote, computed total, and reasoning.
     """
     logger.info(f"🔍 Starting price search for: {description[:100]}")
-    logger.info(f"🔍 Current model: {get_model()}")
+    current_model = get_model()
+    logger.info(f"🔍 Current model: {current_model}")
+
     rules = pricing_rules or PricingRules()
     deps = SearchDeps(
         description=description,
@@ -436,9 +450,13 @@ async def run_price_search(
         pricing_rules=rules,
     )
 
+    # IMPORTANT: Rebuild the agent with the current model to ensure dynamic model switching
+    current_agent = _build_search_agent()
+    logger.info(f"🔍 Created search_agent with model: {current_agent.model}")
+
     result = await run_with_settings(
         "search",
-        search_agent,
+        current_agent,
         "Search for the target item on approved supplier domains. "
         "Find the best price matches, extract pricing data, and compare with historical data. "
         "Return your findings with confidence scores and reasoning.",
