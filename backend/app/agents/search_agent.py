@@ -15,7 +15,7 @@ from urllib.parse import quote_plus
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.anthropic import AnthropicChatModel
+from pydantic_ai.models.anthropic import AnthropicModel
 
 from app.config import settings
 from app.services.llm_settings import run_with_settings
@@ -132,7 +132,7 @@ class SearchDeps:
 # LLM model & agent
 # ---------------------------------------------------------------------------
 
-_model = AnthropicChatModel(model_name=settings.LLM_MODEL_NAME)
+_model = AnthropicModel(model_name=settings.LLM_MODEL_NAME)
 
 SYSTEM_PROMPT = """\
 You are a Croatian construction materials price search specialist. Your task is to \
