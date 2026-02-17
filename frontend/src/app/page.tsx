@@ -15,6 +15,7 @@ import AgentPanel from "@/components/agents/AgentPanel";
 import AgentActivityButton from "@/components/agents/AgentActivityButton";
 import PipelineBar from "@/components/layout/PipelineBar";
 import ChangesPanel from "@/components/changes/ChangesPanel";
+import FilePreviewModal from "@/components/boq/FilePreviewModal";
 import { ErrorBoundary } from "@/components/layout/ErrorBoundary";
 
 export default function HomePage() {
@@ -73,6 +74,7 @@ export default function HomePage() {
 
       <AgentActivityButton />
       <AgentPanel />
+      <FilePreviewModal />
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { Check } from "lucide-react";
 import { formatNumber } from "@/lib/boqTableConfig";
 import { useBoQStore } from "@/stores/boqStore";
 import { useSelectionStore } from "@/stores/selectionStore";
+import { useFilePreviewStore } from "@/stores/filePreviewStore";
 import type { MatchResult, MatchGroup } from "@/lib/types";
 
 const COLUMNS = [
@@ -73,9 +74,20 @@ function MatchRow({ match, wrapText, refQty, refPrice }: { match: MatchResult; w
             </span>
           )}
           {item.file_name && (
-            <span className="text-[9px] text-accent-purple truncate max-w-[120px]" title={item.file_name}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const fileName = item.file_name;
+                if (fileName) {
+                  console.log("👁️ Preview file:", item.file_id, fileName);
+                  useFilePreviewStore.getState().setPreviewFile(item.file_id, fileName);
+                }
+              }}
+              className="text-[9px] text-accent-purple hover:text-accent-purple/70 hover:underline truncate max-w-[120px] transition-colors cursor-pointer"
+              title={`Click to preview ${item.file_name}`}
+            >
               {item.file_name}
-            </span>
+            </button>
           )}
           {(item.project_name || item.date) && (
             <span className="text-[9px] text-text-muted truncate">
