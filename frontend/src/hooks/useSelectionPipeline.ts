@@ -43,6 +43,7 @@ export function useSelectionPipeline() {
       processedIds.current.add(selection.id);
 
       const descriptions = selection.items.map((i) => i.description);
+      console.log("📊 useSelectionPipeline processing:", { selectionId: selection.id, itemCount: selection.items.length, items: selection.items.map(i => ({ id: i.id, description: i.description })) });
       const label =
         selection.startIndex === selection.endIndex
           ? `Row ${selection.items[0]?.item_number ?? selection.startIndex}`

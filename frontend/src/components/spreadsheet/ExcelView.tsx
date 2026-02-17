@@ -159,12 +159,17 @@ export default function ExcelView({ wrapAll = true }: { wrapAll?: boolean }) {
               file_name: null,
             }));
 
+            // Debug: log synthetic items with their descriptions
+            console.log("📊 ExcelView cellData:", cellData);
+            console.log("📊 ExcelView syntheticItems created:", syntheticItems.map(item => ({ id: item.id, description: item.description })));
+
             const minRow = Math.min(...cellData.map((c) => c.row));
             const maxRow = Math.max(...cellData.map((c) => c.row));
 
             // Create selection -- triggers useSelectionPipeline
             const selectionId = addSelection(minRow, maxRow, syntheticItems);
             excelSelectionIdRef.current = selectionId;
+            console.log("📊 ExcelView added selection:", { selectionId, itemCount: syntheticItems.length });
           }, 500);
         });
 

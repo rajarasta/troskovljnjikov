@@ -52,6 +52,7 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
       items,
       color,
     };
+    console.log("📊 SelectionStore.addSelection:", { id, itemCount: items.length, items: items.map(i => ({ id: i.id, description: i.description })) });
     set((s) => ({
       selections: [...s.selections, selection],
       activeSelectionId: id,
