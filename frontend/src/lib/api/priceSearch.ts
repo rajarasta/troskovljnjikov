@@ -10,9 +10,11 @@ export async function triggerPriceSearch(
     description?: string; // For synthetic spreadsheet cells
   }
 ): Promise<{ status: string; item_id: string }> {
+  const payload = options ?? {};
+  console.log("🔍📤 SINGLE SEARCH PAYLOAD:", { itemId, payload });
   return fetchAPI(`/api/price-search/${encodeURIComponent(itemId)}`, {
     method: "POST",
-    body: JSON.stringify(options ?? {}),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -24,9 +26,11 @@ export async function triggerBatchPriceSearch(
     include_shipping?: boolean;
   }
 ): Promise<{ status: string; item_count: number }> {
+  const payload = { item_ids: itemIds, ...options };
+  console.log("🔍📤 BATCH SEARCH PAYLOAD:", payload);
   return fetchAPI("/api/price-search/batch", {
     method: "POST",
-    body: JSON.stringify({ item_ids: itemIds, ...options }),
+    body: JSON.stringify(payload),
   });
 }
 
