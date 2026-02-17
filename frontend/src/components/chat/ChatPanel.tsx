@@ -81,9 +81,20 @@ export default function ChatPanelComponent({ panelId, embedded }: ChatPanelProps
       if (itemIds.length === 0) return;
 
       if (itemIds.length === 1) {
-        await triggerPriceSearch(itemIds[0]);
+        await triggerPriceSearch(itemIds[0], {
+          description: selection?.items[0].full_description || selection?.items[0].description,
+        });
       } else {
-        await triggerBatchPriceSearch(itemIds);
+        // Build descriptions map for synthetic items
+        const descriptions: Record<string, string> = {};
+        selection?.items.forEach((item) => {
+          if (item.id.startsWith("excel-cell-")) {
+            descriptions[item.id] = item.full_description || item.description || "";
+          }
+        });
+        await triggerBatchPriceSearch(itemIds, {
+          descriptions: Object.keys(descriptions).length > 0 ? descriptions : undefined,
+        });
       }
     } catch (err) {
       const store = useChatPanelStore.getState();
