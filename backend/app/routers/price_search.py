@@ -74,13 +74,18 @@ async def trigger_batch_search(
     if not req.item_ids:
         raise HTTPException(status_code=400, detail="No item_ids provided")
 
+    logger.debug(f"Batch search requested for {len(req.item_ids)} items")
+    logger.debug(f"Descriptions provided: {req.descriptions}")
+
     # For each item, trigger search in background
     for item_id in req.item_ids:
         if is_synthetic_item_id(item_id):
             # Synthetic cell
             description = (req.descriptions or {}).get(item_id) if req.descriptions else None
+            logger.debug(f"Synthetic item {item_id}: description from request = {description!r}")
             if not description:
                 description = f"Spreadsheet cell"
+                logger.debug(f"  -> Using fallback description: {description!r}")
             _status_cache[item_id] = "searching"
             await emit(AGENT_SPAWN, {"agent": "lookup", "item_id": item_id})
             await emit(AGENT_RESULT, {
@@ -151,6 +156,9 @@ async def trigger_price_search(
 
             # Use description from request, or create a minimal one
             description = req.description or f"Spreadsheet cell (Row {parsed['row']}, Col {parsed['col']})"
+            logger.debug(f"Single-item search: synthetic item {item_id}")
+            logger.debug(f"  Description from request: {req.description!r}")
+            logger.debug(f"  Final description: {description!r}")
 
             # Create virtual item
             item = resolve_synthetic_item(item_id, description, "", db)
@@ -240,6 +248,7 @@ async def _run_search_task(
             "best_quote": result.best_quote.model_dump() if result.best_quote else None,
             "computed": result.computed,
             "reasoning": result.reasoning,
+            "search_log": result.search_log,
         })
 
     except Exception as exc:
@@ -248,6 +257,7 @@ async def _run_search_task(
         await emit(SEARCH_COMPLETE, {
             "item_id": item_id,
             "error": str(exc),
+            "search_log": [],
         })
 
 

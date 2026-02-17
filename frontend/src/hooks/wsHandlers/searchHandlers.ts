@@ -29,6 +29,20 @@ export const searchHandlers: Record<string, (event: AgentEvent) => void> = {
     const payload = event.payload ?? {};
     const itemId = payload.item_id as string;
 
+    // Log diagnostics to console for debugging
+    console.group(`🔍 Search Complete: ${itemId}`);
+    console.log("Quote count:", payload.quote_count || 0);
+    if (payload.reasoning) {
+      console.log("Agent reasoning:", payload.reasoning);
+    }
+    if (payload.search_log && Array.isArray(payload.search_log) && payload.search_log.length > 0) {
+      console.log("Search log steps:", payload.search_log);
+    }
+    if (payload.error) {
+      console.error("Search error:", payload.error);
+    }
+    console.groupEnd();
+
     useSearchStore.getState().setComplete(itemId, {
       quote_count: (payload.quote_count as number) || 0,
       best_quote: (payload.best_quote as WebQuote) || null,
