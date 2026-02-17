@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote_plus
@@ -132,7 +133,11 @@ class SearchDeps:
 # LLM model & agent
 # ---------------------------------------------------------------------------
 
-_model = AnthropicModel(model_name=settings.LLM_MODEL_NAME)
+# Ensure ANTHROPIC_API_KEY is in environment before AnthropicModel tries to access it
+if settings.ANTHROPIC_API_KEY:
+    os.environ["ANTHROPIC_API_KEY"] = settings.ANTHROPIC_API_KEY
+
+_model = AnthropicModel(model_name=settings.CLAUDE_MODEL)
 
 SYSTEM_PROMPT = """\
 You are a Croatian construction materials price search specialist. Your task is to \
