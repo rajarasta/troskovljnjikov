@@ -447,6 +447,7 @@ export default function PriceSearchModal({ isOpen, onClose }: PriceSearchModalPr
 
     if (isSingleItem) {
       const item = selectedItems[0];
+      console.log("🔍 Single item search:", { id: item.id, description: item.description, full_description: item.full_description });
       await triggerPriceSearch(item.id, {
         description: item.full_description || item.description || undefined,
         include_vat: includeVat,
@@ -460,6 +461,8 @@ export default function PriceSearchModal({ isOpen, onClose }: PriceSearchModalPr
           descriptions[item.id] = item.full_description || item.description || "";
         }
       });
+
+      console.log("🔍 Batch search:", { items: selectedItems.length, descriptions, selectedItems });
 
       await triggerBatchPriceSearch(
         selectedItems.map((i) => i.id),
