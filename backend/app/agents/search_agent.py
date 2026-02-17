@@ -19,7 +19,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.anthropic import AnthropicModel
 
 from app.config import settings
-from app.services.llm_settings import run_with_settings
+from app.services.llm_settings import run_with_settings, get_model
 from app.services.domain_registry import (
     DomainConfig,
     get_all_domains,
@@ -218,12 +218,15 @@ async def search_domain(
     """
     import json
 
-    logger.debug(f"🔍 [Tool] search_domain called: domain={domain}, query={query[:50]}")
+    logger.info(f"🔍 [Tool] search_domain CALLED: domain={domain}, query={query[:50]}")
     ctx.deps._search_log.append(f"Searching {domain} for: {query}")
 
     search_url = get_search_url(domain, quote_plus(query))
+    logger.info(f"🔍 [Tool] search_domain got search_url: {search_url}")
     if not search_url:
-        return json.dumps({"error": f"No search URL template for {domain}", "candidates": []})
+        result = json.dumps({"error": f"No search URL template for {domain}", "candidates": []})
+        logger.warning(f"🔍 [Tool] search_domain returning error: {result}")
+        return result
 
     try:
         result = await fetch_page(search_url)
@@ -272,7 +275,7 @@ async def fetch_and_extract(
     """
     import json
 
-    logger.debug(f"🔍 [Tool] fetch_and_extract called: url={url[:80]}")
+    logger.info(f"🔍 [Tool] fetch_and_extract CALLED: url={url[:80]}")
     if not is_approved(url):
         return json.dumps({"error": f"URL not on approved domain: {url}"})
 
@@ -423,6 +426,7 @@ async def run_price_search(
         Structured result with quotes, best quote, computed total, and reasoning.
     """
     logger.info(f"🔍 Starting price search for: {description[:100]}")
+    logger.info(f"🔍 Current model: {get_model()}")
     rules = pricing_rules or PricingRules()
     deps = SearchDeps(
         description=description,
@@ -443,6 +447,7 @@ async def run_price_search(
 
     output = result.output
     logger.info(f"🔍 Search agent returned: quotes={len(output.quotes)}, search_log_entries={len(output.search_log)}")
+    logger.info(f"🔍 Search log: {output.search_log}")
 
     # Merge tool-collected quotes into the result
     if deps._quotes and not output.quotes:
