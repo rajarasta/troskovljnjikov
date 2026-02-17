@@ -26,7 +26,13 @@ from app.services.domain_registry import (
     get_search_url,
     is_approved,
 )
-from app.services.price_extractor import PriceField, extract_prices, extract_product_links
+from app.services.price_extractor import (
+    PriceField,
+    ProductMetadata,
+    extract_prices,
+    extract_product_links,
+    extract_metadata,
+)
 from app.services.price_normalizer import (
     ComputedTotal,
     NormalizedQuote,
@@ -278,6 +284,9 @@ async def fetch_and_extract(
             ctx.deps._search_log.append(f"No prices found on {url}")
             return json.dumps({"url": url, "prices": [], "text_snippet": result.text[:500]})
 
+        # Extract rich metadata (images, ratings, stock, shipping, etc.)
+        metadata = extract_metadata(result.html)
+
         # Normalize prices
         config = get_domain_config(url)
         vendor = config.display_name if config else "Unknown"
@@ -299,6 +308,18 @@ async def fetch_and_extract(
                 confidence=nq.confidence,
                 evidence={"raw_text": nq.evidence_snippet, "source_method": nq.source_method},
                 image_url=nq.image_url,
+                # Rich metadata fields
+                image_urls=metadata.images,
+                rating=metadata.rating,
+                review_count=metadata.review_count,
+                stock_status=metadata.stock_status,
+                stock_quantity=metadata.stock_quantity,
+                shipping_cost=metadata.shipping_cost,
+                free_shipping_threshold=metadata.free_shipping_threshold,
+                brand=metadata.brand,
+                sku=metadata.sku,
+                ean=metadata.ean,
+                specifications=metadata.specifications,
             )
             ctx.deps._quotes.append(quote)
             price_data.append({
