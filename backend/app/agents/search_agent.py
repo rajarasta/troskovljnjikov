@@ -45,7 +45,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class WebQuote(BaseModel):
-    """A single price quote from a web source."""
+    """A single price quote from a web source with rich product metadata."""
+
+    # Core pricing fields
     vendor: str = Field(description="Supplier/vendor name")
     url: str = Field(description="Product page URL")
     product_name: str = Field(description="Product name as listed on the website")
@@ -55,10 +57,43 @@ class WebQuote(BaseModel):
     pack_size: float | None = Field(default=None, description="Pack size if applicable")
     pack_unit: str | None = Field(default=None)
     vat_included: bool = Field(default=True)
-    availability: str = Field(default="unknown")
     confidence: float = Field(ge=0, le=1, description="How confident this matches the target item")
-    evidence: dict[str, str] = Field(default_factory=dict, description="Evidence: raw_text, snippet")
-    image_url: str = Field(default="")
+
+    # Images
+    image_url: str = Field(default="", description="Primary product image URL")
+    image_urls: list[str] = Field(default_factory=list, description="Gallery of product images")
+
+    # Stock & Availability
+    availability: str = Field(default="unknown", description="Availability status")
+    stock_status: str = Field(default="unknown", description="in_stock, low_stock, out_of_stock, discontinued")
+    stock_quantity: int | None = Field(default=None, description="Actual quantity in stock if available")
+    lead_time_days: int | None = Field(default=None, description="Estimated delivery time in days")
+
+    # Reviews & Ratings
+    rating: float | None = Field(default=None, description="Average rating (0-5 scale)")
+    review_count: int | None = Field(default=None, description="Number of customer reviews")
+
+    # Shipping
+    shipping_cost: float | None = Field(default=None, description="Shipping cost in currency")
+    free_shipping_threshold: float | None = Field(default=None, description="Order amount for free shipping")
+    shipping_policy: str = Field(default="unknown", description="free, paid, pickup_only")
+
+    # Product Details
+    brand: str = Field(default="", description="Product brand/manufacturer")
+    sku: str = Field(default="", description="SKU/product code")
+    ean: str = Field(default="", description="EAN barcode")
+    specifications: dict[str, str] = Field(default_factory=dict, description="Product specs (material, dimensions, weight, etc)")
+
+    # Volume/Bulk Pricing
+    volume_prices: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Volume pricing: [{min_qty: 10, price: 8.50}, ...]"
+    )
+
+    # Metadata
+    evidence: dict[str, str] = Field(default_factory=dict, description="Evidence: raw_text, snippet, source_method")
+    scraped_at: str = Field(default="", description="ISO timestamp when scraped")
+    source_method: str = Field(default="unknown", description="jsonld, meta, css, llm")
 
 
 class SearchResult(BaseModel):

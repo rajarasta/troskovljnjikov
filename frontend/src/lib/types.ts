@@ -146,6 +146,7 @@ export interface AutopilotMatchResult {
 export type SearchStatus = "idle" | "searching" | "done" | "error";
 
 export interface WebQuote {
+  // Core pricing fields
   vendor: string;
   url: string;
   product_name: string;
@@ -155,10 +156,40 @@ export interface WebQuote {
   pack_size: number | null;
   pack_unit: string | null;
   vat_included: boolean;
-  availability: string;
   confidence: number;
-  evidence: Record<string, string>;
+
+  // Images
   image_url: string;
+  image_urls: string[];
+
+  // Stock & Availability
+  availability: string;
+  stock_status: string;
+  stock_quantity: number | null;
+  lead_time_days: number | null;
+
+  // Reviews & Ratings
+  rating: number | null;
+  review_count: number | null;
+
+  // Shipping
+  shipping_cost: number | null;
+  free_shipping_threshold: number | null;
+  shipping_policy: string;
+
+  // Product Details
+  brand: string;
+  sku: string;
+  ean: string;
+  specifications: Record<string, string>;
+
+  // Volume/Bulk Pricing
+  volume_prices: Array<{ min_qty?: number; price?: number }>;
+
+  // Metadata
+  evidence: Record<string, string>;
+  scraped_at: string;
+  source_method: string;
 }
 
 export interface ComputedTotal {
