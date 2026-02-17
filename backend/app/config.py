@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     LLM_MODEL_NAME: str = "ministral-3b"  # Local model name
 
     # Claude API (primary for search agent tool calling)
-    CLAUDE_API_KEY: str = ""
-    CLAUDE_BASE_URL: str = "https://api.anthropic.com"
+    ANTHROPIC_API_KEY: str = ""
+    CLAUDE_BASE_URL: str = "https://api.anthropic.com/v1"
     CLAUDE_MODEL: str = "claude-opus-4-6"
 
     # CORS Configuration
