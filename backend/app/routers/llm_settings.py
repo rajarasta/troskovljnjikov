@@ -41,18 +41,29 @@ class SetModelRequest(BaseModel):
 
 @router.get("/llm-settings/global/models")
 async def list_available_models():
-    """Query llama-server /v1/models and return available models + current selection."""
+    """Return available model providers (anthropic + local llama-server models)."""
     current = get_current_model_name()
+
+    # Always include Anthropic option if API key is configured
+    models = []
+    if app_settings.ANTHROPIC_API_KEY and app_settings.ANTHROPIC_API_KEY != "":
+        models.append("anthropic")
+
+    # Also try to get local llama-server models
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{app_settings.LLM_BASE_URL}/models")
             resp.raise_for_status()
             data = resp.json()
-            models = [m["id"] for m in data.get("data", [])]
+            local_models = [m["id"] for m in data.get("data", [])]
+            models.extend(local_models)
     except Exception as exc:
-        logger.warning("Failed to query /v1/models: %s", exc)
-        # Return just the current model so the UI can still render
-        models = [current]
+        logger.warning("Failed to query llama-server /v1/models: %s", exc)
+
+    # Fallback: if no models available, return current or defaults
+    if not models:
+        models = [current] if current else ["ministral-3b"]
+
     return {"models": models, "current": current}
 
 

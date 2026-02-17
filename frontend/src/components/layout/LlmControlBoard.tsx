@@ -49,9 +49,15 @@ export default function LlmControlBoard() {
               onChange={(e) => setModel(e.target.value)}
               className="w-full text-xs bg-bg-primary border border-border-default rounded px-2 py-1 text-text-secondary focus:outline-none focus:border-accent-cyan/50"
             >
-              {availableModels.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
+              {availableModels.map((m) => {
+                // Format model name for display
+                let displayName = m;
+                if (m === "anthropic") displayName = "Anthropic (Claude)";
+                else if (m.includes("ministral")) displayName = "Local (Ministral)";
+                return (
+                  <option key={m} value={m}>{displayName}</option>
+                );
+              })}
             </select>
           )}
         </div>

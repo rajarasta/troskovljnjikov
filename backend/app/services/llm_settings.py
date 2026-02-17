@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic_ai import Agent
+from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -346,18 +347,33 @@ _load()
 # ---------------------------------------------------------------------------
 
 _provider = OpenAIProvider(base_url=app_settings.LLM_BASE_URL)
-_cached_model: OpenAIChatModel | None = None
+_cached_model: OpenAIChatModel | AnthropicModel | None = None
 _cached_model_name: str | None = None
 
 
-def get_model() -> OpenAIChatModel:
-    """Return the current global LLM model, creating/caching as needed."""
+def get_model() -> OpenAIChatModel | AnthropicModel:
+    """Return the current global LLM model, creating/caching as needed.
+
+    Returns AnthropicModel if model_name is "anthropic", otherwise OpenAIChatModel.
+    """
     global _cached_model, _cached_model_name
     current = get_current_model_name()
     if _cached_model is None or _cached_model_name != current:
-        _cached_model = OpenAIChatModel(model_name=current, provider=_provider)
+        if current == "anthropic":
+            if not app_settings.ANTHROPIC_API_KEY:
+                logger.warning("Anthropic selected but ANTHROPIC_API_KEY not set, falling back to local model")
+                current = app_settings.LLM_MODEL_NAME
+                _cached_model = OpenAIChatModel(model_name=current, provider=_provider)
+            else:
+                # Set the environment variable for AnthropicModel
+                import os
+                os.environ["ANTHROPIC_API_KEY"] = app_settings.ANTHROPIC_API_KEY
+                _cached_model = AnthropicModel(model_name=app_settings.CLAUDE_MODEL)
+                logger.info("Global LLM model set to Anthropic (%s)", app_settings.CLAUDE_MODEL)
+        else:
+            _cached_model = OpenAIChatModel(model_name=current, provider=_provider)
+            logger.info("Global LLM model set to local '%s'", current)
         _cached_model_name = current
-        logger.info("Global LLM model set to '%s'", current)
     return _cached_model
 
 
