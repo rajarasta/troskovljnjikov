@@ -34,6 +34,22 @@ class PriceField:
     image_url: str = ""
 
 
+@dataclass
+class ProductMetadata:
+    """Rich product metadata extracted from a page."""
+    images: list[str] = field(default_factory=list)  # Gallery images
+    rating: float | None = None  # 0-5
+    review_count: int | None = None
+    stock_status: str = "unknown"  # "in_stock", "low_stock", "out_of_stock"
+    stock_quantity: int | None = None
+    shipping_cost: float | None = None
+    free_shipping_threshold: float | None = None
+    brand: str = ""
+    sku: str = ""
+    ean: str = ""
+    specifications: dict[str, str] = field(default_factory=dict)
+
+
 # ---------------------------------------------------------------------------
 # Layer 1: JSON-LD extraction
 # ---------------------------------------------------------------------------
@@ -237,6 +253,148 @@ def extract_css_prices(html: str) -> list[PriceField]:
                     pass
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Layer 4: Rich metadata extraction (images, ratings, stock, shipping)
+# ---------------------------------------------------------------------------
+
+def extract_metadata(html: str) -> ProductMetadata:
+    """Extract rich product metadata from an HTML page.
+
+    Extracts images, ratings, stock info, shipping, brand, specifications, etc.
+    """
+    metadata = ProductMetadata()
+    soup = BeautifulSoup(html, "lxml")
+
+    # Try JSON-LD first (highest confidence)
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or "")
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                _extract_metadata_from_jsonld(item, metadata)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    # Fallback to meta tags
+    if not metadata.images:
+        og_image = soup.find("meta", property="og:image")
+        if og_image and og_image.get("content"):
+            metadata.images.append(og_image["content"])
+
+    if not metadata.rating:
+        rating_meta = soup.find("meta", property="product:rating:value")
+        if rating_meta and rating_meta.get("content"):
+            try:
+                metadata.rating = float(rating_meta["content"])
+            except (ValueError, TypeError):
+                pass
+
+    # Extract from common CSS selectors if not found
+    if not metadata.images:
+        for img_sel in [".product-gallery img[src]", ".product-images img", "[data-gallery-image]"]:
+            for img in soup.select(img_sel)[:5]:  # Limit to 5 images
+                src = img.get("src") or img.get("data-src")
+                if src:
+                    metadata.images.append(src)
+
+    return metadata
+
+
+def _extract_metadata_from_jsonld(item: dict[str, Any], metadata: ProductMetadata) -> None:
+    """Extract metadata fields from JSON-LD Product schema."""
+    item_type = item.get("@type", "")
+    if isinstance(item_type, list):
+        item_type = item_type[0] if item_type else ""
+
+    if item_type in ("Product", "IndividualProduct"):
+        # Images
+        images = item.get("image", [])
+        if isinstance(images, str):
+            images = [images]
+        elif isinstance(images, dict):
+            images = [images.get("url", "")]
+        for img in images:
+            if img and img not in metadata.images:
+                metadata.images.append(str(img))
+
+        # Ratings
+        rating_data = item.get("aggregateRating", {})
+        if isinstance(rating_data, dict):
+            if "ratingValue" in rating_data and not metadata.rating:
+                try:
+                    metadata.rating = float(rating_data["ratingValue"])
+                except (ValueError, TypeError):
+                    pass
+            if "reviewCount" in rating_data and not metadata.review_count:
+                try:
+                    metadata.review_count = int(rating_data["reviewCount"])
+                except (ValueError, TypeError):
+                    pass
+
+        # Brand
+        brand = item.get("brand", {})
+        if isinstance(brand, dict):
+            brand = brand.get("name", "")
+        if brand and not metadata.brand:
+            metadata.brand = str(brand)
+
+        # SKU & EAN
+        if "sku" in item and not metadata.sku:
+            metadata.sku = str(item["sku"])
+        if "gtin13" in item and not metadata.ean:
+            metadata.ean = str(item["gtin13"])
+
+        # Specifications
+        if "additionalProperty" in item:
+            props = item["additionalProperty"]
+            if isinstance(props, list):
+                for prop in props:
+                    if isinstance(prop, dict) and "name" in prop and "value" in prop:
+                        metadata.specifications[str(prop["name"])] = str(prop["value"])
+
+        # Offers for shipping/availability
+        offers = item.get("offers", {})
+        if isinstance(offers, dict):
+            _extract_offer_metadata(offers, metadata)
+        elif isinstance(offers, list):
+            for offer in offers:
+                if isinstance(offer, dict):
+                    _extract_offer_metadata(offer, metadata)
+
+    # Check for nested @graph
+    if "@graph" in item:
+        for sub in item["@graph"]:
+            if isinstance(sub, dict):
+                _extract_metadata_from_jsonld(sub, metadata)
+
+
+def _extract_offer_metadata(offer: dict[str, Any], metadata: ProductMetadata) -> None:
+    """Extract metadata from schema.org Offer."""
+    # Stock status
+    availability = offer.get("availability", "")
+    if "InStock" in str(availability) and metadata.stock_status == "unknown":
+        metadata.stock_status = "in_stock"
+    elif "OutOfStock" in str(availability) and metadata.stock_status == "unknown":
+        metadata.stock_status = "out_of_stock"
+
+    # Shipping
+    shipping = offer.get("shippingDetails", {})
+    if isinstance(shipping, dict):
+        if "shippingRate" in shipping:
+            rate = shipping["shippingRate"]
+            if isinstance(rate, dict) and "price" in rate and not metadata.shipping_cost:
+                try:
+                    metadata.shipping_cost = float(rate["price"])
+                except (ValueError, TypeError):
+                    pass
+
+        if "freeShippingThreshold" in shipping and not metadata.free_shipping_threshold:
+            try:
+                metadata.free_shipping_threshold = float(shipping["freeShippingThreshold"])
+            except (ValueError, TypeError):
+                pass
 
 
 # ---------------------------------------------------------------------------
