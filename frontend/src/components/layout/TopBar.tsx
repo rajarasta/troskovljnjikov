@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Upload, FolderOpen, TreePine, Camera, FlaskConical, ChevronDown, Columns3, Cpu } from "lucide-react";
+import { Upload, FolderOpen, TreePine, Camera, FlaskConical, ChevronDown, Columns3, Cpu, Globe } from "lucide-react";
 import { useBoQStore } from "@/stores/boqStore";
 import { usePresetStore } from "@/stores/presetStore";
 import * as api from "@/lib/api";
@@ -10,6 +10,7 @@ import FileList from "@/components/upload/FileList";
 import BoQNavigator from "@/components/boq/BoQNavigator";
 import PhotoUpload from "@/components/photos/PhotoUpload";
 import LlmControlBoard from "@/components/layout/LlmControlBoard";
+import PriceSearchModal from "@/components/search/PriceSearchModal";
 
 const ALL_OPTIONAL_COLUMNS = [
   { key: "material_price", label: "Cijena mat." },
@@ -26,6 +27,7 @@ type PopoverKey = "upload" | "files" | "navigator" | "photos" | "preset" | "llm"
 
 export default function TopBar({ isConnected }: { isConnected: boolean }) {
   const [openPopover, setOpenPopover] = useState<PopoverKey>(null);
+  const [searchModalOpen, setSearchModalOpen] = useState(false);
   const { items, selectedRow, selectRow } = useBoQStore();
   const filesCount = useBoQStore((s) => s.files.length);
   const selectedFileId = useBoQStore((s) => s.selectedFileId);
@@ -110,6 +112,13 @@ export default function TopBar({ isConnected }: { isConnected: boolean }) {
       </button>
       <button onClick={() => toggle("llm")} className={buttonClass("llm")}>
         <Cpu className="w-3.5 h-3.5" /> LLM
+      </button>
+      <button
+        onClick={() => setSearchModalOpen(true)}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-all duration-150
+          text-text-muted hover:text-accent-purple hover:bg-accent-purple/10 border border-transparent hover:border-accent-purple/20"
+      >
+        <Globe className="w-3.5 h-3.5" /> Price Search
       </button>
 
       <div className="w-px h-4 bg-border-default" />
@@ -215,6 +224,9 @@ export default function TopBar({ isConnected }: { isConnected: boolean }) {
           ))}
         </div>
       )}
+
+      {/* Price Search Modal */}
+      <PriceSearchModal isOpen={searchModalOpen} onClose={() => setSearchModalOpen(false)} />
     </div>
   );
 }

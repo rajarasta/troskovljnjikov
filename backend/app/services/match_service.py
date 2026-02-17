@@ -4,6 +4,7 @@ Extracted from routers/items.py to keep routes thin and logic testable.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -20,6 +21,8 @@ from app.schemas.boq import (
     PriceHistoryResponse,
 )
 from app.services.rag import search as rag_search
+
+logger = logging.getLogger(__name__)
 
 
 # ── Stats helpers ──────────────────────────────────────────────────────
@@ -211,8 +214,36 @@ def match_with_row_lookup(req: MatchRequest, db: Session) -> MatchResponse:
 
     # Detect composite sub-items
     composite_subs = [i for i in db_items if i.item_type == "composite_sub"]
+
+    # Phase 1: Auto-expand section header to include sub-items
     if not composite_subs:
-        return flat_match(req, db)
+        section_headers = [i for i in db_items if i.item_type == "section_header"]
+        if section_headers:
+            header = section_headers[0]
+            # Try expanding via BoQUnit
+            unit = db.query(BoQUnit).filter(
+                BoQUnit.file_id == req.file_id,
+                BoQUnit.parent_item_number == header.item_number,
+            ).first()
+            if unit:
+                db_items = db.query(BoQItem).filter(
+                    BoQItem.file_id == req.file_id,
+                    BoQItem.row >= unit.start_row,
+                    BoQItem.row <= unit.end_row,
+                ).order_by(BoQItem.row).all()
+                composite_subs = [i for i in db_items if i.item_type == "composite_sub"]
+            # Fallback: query children by parent_item_number
+            if not composite_subs and header.item_number:
+                children = db.query(BoQItem).filter(
+                    BoQItem.file_id == req.file_id,
+                    BoQItem.parent_item_number == header.item_number,
+                    BoQItem.item_type == "composite_sub",
+                ).order_by(BoQItem.row).all()
+                if children:
+                    composite_subs = children
+                    db_items = [header] + children
+        if not composite_subs:
+            return flat_match(req, db)
 
     # Resolve parent description
     parent_desc: str | None = None
@@ -233,6 +264,16 @@ def match_with_row_lookup(req: MatchRequest, db: Session) -> MatchResponse:
         )
         if parent_item:
             parent_desc = parent_item.full_description or parent_item.description
+
+    # Unit-level search: search with parent description for whole-unit matches
+    unit_matches: list[MatchResult] = []
+    if parent_desc:
+        unit_hits = rag_search(
+            query_text=parent_desc,
+            top_k=req.max_results,
+            file_id_exclude=req.file_id,
+        )
+        unit_matches, _ = process_hits(unit_hits, req.threshold, req.quantity, db)
 
     # Match each sub-item individually
     groups: list[MatchGroup] = []
@@ -256,7 +297,7 @@ def match_with_row_lookup(req: MatchRequest, db: Session) -> MatchResponse:
         ))
 
     return MatchResponse(
-        matches=[],
+        matches=unit_matches,
         stats=build_stats(all_prices),
         groups=groups,
         is_composite=True,
@@ -264,11 +305,53 @@ def match_with_row_lookup(req: MatchRequest, db: Session) -> MatchResponse:
     )
 
 
-def find_matches(req: MatchRequest, db: Session) -> MatchResponse:
+async def _apply_llm_ranking(
+    query_description: str, response: MatchResponse,
+) -> MatchResponse:
+    """Optional post-processing: re-rank matches using LLM reasoning."""
+    from app.agents.matcher_agent import rank_matches
+
+    candidates = [
+        {
+            "id": m.item.id,
+            "description": m.item.description,
+            "unit": m.item.unit or "",
+            "unitPrice": m.item.unit_price,
+            "total": m.item.total,
+            "fileName": m.item.file_name or "",
+            "score": m.similarity,
+        }
+        for m in response.matches
+    ]
+    if not candidates:
+        return response
+    try:
+        ranking = await rank_matches(query_description, candidates)
+        ranked_by_id = {rm.item_id: rm for rm in ranking.ranked_matches}
+        for m in response.matches:
+            rm = ranked_by_id.get(m.item.id)
+            if rm:
+                m.llm_confidence = rm.confidence
+                m.llm_reasoning = rm.reasoning
+        response.matches.sort(
+            key=lambda m: (m.llm_confidence or 0, m.similarity), reverse=True,
+        )
+    except Exception as exc:
+        logger.warning("LLM re-ranking failed, keeping original order: %s", exc)
+    return response
+
+
+async def find_matches(req: MatchRequest, db: Session) -> MatchResponse:
     """Main entry point: dispatches to flat or composite matching."""
     if req.file_id and req.start_row is not None and req.end_row is not None:
-        return match_with_row_lookup(req, db)
-    return flat_match(req, db)
+        response = match_with_row_lookup(req, db)
+    else:
+        response = flat_match(req, db)
+
+    if req.use_llm_ranking and response.matches:
+        response = await _apply_llm_ranking(req.description, response)
+
+    return response
 
 
 # ── Price history ──────────────────────────────────────────────────────

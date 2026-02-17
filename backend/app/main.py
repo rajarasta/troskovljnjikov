@@ -10,7 +10,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import settings
 from app.database import create_tables, seed_default_presets
-from app.routers import upload, files, items, agents, chat, export, pipeline, presets, completion, autopilot, llm_settings
+from app.routers import upload, files, items, agents, chat, export, pipeline, presets, completion, autopilot, llm_settings, price_search
 from app.ws.manager import manager
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,7 @@ app.include_router(presets.router, prefix="/api", tags=["presets"])
 app.include_router(completion.router, prefix="/api", tags=["completion"])
 app.include_router(autopilot.router, prefix="/api", tags=["autopilot"])
 app.include_router(llm_settings.router, prefix="/api", tags=["llm-settings"])
+app.include_router(price_search.router, prefix="/api", tags=["price-search"])
 
 # Static file serving for uploaded drawings (must come AFTER router registrations)
 os.makedirs("uploads", exist_ok=True)

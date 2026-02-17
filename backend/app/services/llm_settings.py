@@ -1,4 +1,5 @@
-"""Central LLM settings registry — per-agent temperature, prompts & enabled flag.
+"""Central LLM settings registry — per-agent temperature, prompts & enabled flag,
+plus global model selection.
 
 Settings are persisted to ``data/llm_settings.json`` and read on every agent call
 so changes take effect immediately.
@@ -8,6 +9,9 @@ Each agent has:
 - **temperature** — LLM sampling temperature
 - **knowledge_prompt** — domain knowledge / role definition ("who you are")
 - **instruction_prompt** — behavioral rules / output format ("what to do")
+
+Global:
+- **model_name** — the LLM model all agents use (switchable at runtime)
 """
 
 from __future__ import annotations
@@ -19,7 +23,10 @@ from pathlib import Path
 from typing import Any
 
 from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
+from app.config import settings as app_settings
 from app.ws.events import AGENT_RUN_END, AGENT_RUN_START, emit
 
 logger = logging.getLogger(__name__)
@@ -229,6 +236,20 @@ AGENT_DEFAULTS: dict[str, dict[str, Any]] = {
             "Always express prices as positive numbers. Use the same currency as the historical data."
         ),
     },
+    "search": {
+        "label": "Search",
+        "category": "agents",
+        "enabled": True,
+        "temperature": 0.1,
+        "knowledge_prompt": (
+            "You are a Croatian construction materials price search specialist."
+        ),
+        "instruction_prompt": (
+            "Search approved supplier websites for current prices matching the target item. "
+            "Use search_domain, fetch_and_extract, and rag_lookup tools. "
+            "Report confidence honestly and consider unit compatibility."
+        ),
+    },
     "vision": {
         "label": "Vision",
         "category": "agents",
@@ -270,6 +291,7 @@ AGENT_DEFAULTS: dict[str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 
 _overrides: dict[str, dict[str, Any]] = {}
+_global_settings: dict[str, Any] = {}
 
 
 def _migrate_overrides() -> bool:
@@ -292,26 +314,68 @@ def _migrate_overrides() -> bool:
 
 
 def _load() -> None:
-    global _overrides
+    global _overrides, _global_settings
     if _SETTINGS_PATH.exists():
         try:
-            _overrides = json.loads(_SETTINGS_PATH.read_text())
+            data = json.loads(_SETTINGS_PATH.read_text())
         except Exception:
             logger.warning("Failed to load LLM settings from %s, using defaults", _SETTINGS_PATH)
-            _overrides = {}
+            data = {}
     else:
-        _overrides = {}
+        data = {}
+    _global_settings = data.pop("_global", {})
+    _overrides = data
     if _migrate_overrides():
         _save()
 
 
 def _save() -> None:
     _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _SETTINGS_PATH.write_text(json.dumps(_overrides, indent=2, ensure_ascii=False))
+    data = {**_overrides}
+    if _global_settings:
+        data["_global"] = _global_settings
+    _SETTINGS_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 
 # Load on module import
 _load()
+
+
+# ---------------------------------------------------------------------------
+# Global model registry
+# ---------------------------------------------------------------------------
+
+_provider = OpenAIProvider(base_url=app_settings.LLM_BASE_URL)
+_cached_model: OpenAIChatModel | None = None
+_cached_model_name: str | None = None
+
+
+def get_model() -> OpenAIChatModel:
+    """Return the current global LLM model, creating/caching as needed."""
+    global _cached_model, _cached_model_name
+    current = get_current_model_name()
+    if _cached_model is None or _cached_model_name != current:
+        _cached_model = OpenAIChatModel(model_name=current, provider=_provider)
+        _cached_model_name = current
+        logger.info("Global LLM model set to '%s'", current)
+    return _cached_model
+
+
+def get_current_model_name() -> str:
+    """Return the currently selected model name."""
+    return _global_settings.get("model_name", app_settings.LLM_MODEL_NAME)
+
+
+def set_model_name(name: str) -> str:
+    """Set the global model name. Returns the new name."""
+    global _cached_model, _cached_model_name
+    _global_settings["model_name"] = name
+    # Invalidate cache so next get_model() creates a fresh instance
+    _cached_model = None
+    _cached_model_name = None
+    _save()
+    logger.info("Global model changed to '%s'", name)
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -413,14 +477,18 @@ async def run_with_settings(
     default_composed = _compose_system_prompt(defaults)
     prompt_changed = composed_prompt and composed_prompt != default_composed
 
+    # Check if global model differs from the agent's built-in model
+    current_model = get_model()
+    model_changed = current_model is not agent.model
+
     await emit(AGENT_RUN_START, {"agent_id": agent_id})
     t0 = time.monotonic()
     success = True
     try:
-        if prompt_changed:
+        if prompt_changed or model_changed:
             tmp_agent = Agent(
-                model=agent.model,
-                system_prompt=composed_prompt,
+                model=current_model,
+                system_prompt=composed_prompt if prompt_changed else agent._system_prompts[0] if hasattr(agent, '_system_prompts') and agent._system_prompts else "",
                 output_type=agent._output_type if hasattr(agent, '_output_type') else str,
                 retries=agent._max_result_retries if hasattr(agent, '_max_result_retries') else 1,
             )
@@ -470,12 +538,15 @@ async def run_stream_with_settings(
     default_composed = _compose_system_prompt(defaults)
     prompt_changed = composed_prompt and composed_prompt != default_composed
 
+    current_model = get_model()
+    model_changed = current_model is not agent.model
+
     await emit(AGENT_RUN_START, {"agent_id": agent_id})
 
-    if prompt_changed:
+    if prompt_changed or model_changed:
         tmp_agent = Agent(
-            model=agent.model,
-            system_prompt=composed_prompt,
+            model=current_model,
+            system_prompt=composed_prompt if prompt_changed else agent._system_prompts[0] if hasattr(agent, '_system_prompts') and agent._system_prompts else "",
             retries=agent._max_result_retries if hasattr(agent, '_max_result_retries') else 1,
         )
         return tmp_agent.run_stream(prompt, model_settings=model_settings, **kwargs)

@@ -22,6 +22,7 @@ interface ChatPanelState {
   setAnalyzing: (panelId: string, analyzing: boolean) => void;
   setSending: (panelId: string, sending: boolean) => void;
   setError: (panelId: string, error: string | null) => void;
+  clearAll: () => void;
   getPanelBySelection: (selectionId: string) => ChatPanel | undefined;
   panelExists: (panelId: string) => boolean;
 }
@@ -119,6 +120,8 @@ export const useChatPanelStore = create<ChatPanelState>((set, get) => ({
       ),
     }));
   },
+
+  clearAll: () => set({ panels: [], activePanelId: null }),
 
   getPanelBySelection: (selectionId) => {
     return get().panels.find((p) => p.selectionId === selectionId);

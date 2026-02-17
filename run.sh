@@ -6,7 +6,6 @@ set -euo pipefail
 # Ctrl-C stops everything.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MAIN_REPO="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd || echo "$SCRIPT_DIR")"
 
 # ── Config ───────────────────────────────────────────────────────────
 
@@ -14,9 +13,9 @@ LLM_PORT=8095
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
 
-# llama-server binary and model (from main repo)
-LLAMA_BIN="${MAIN_REPO}/bin/llama-server"
-LLAMA_MODEL="${MAIN_REPO}/models/llama3.gguf"
+# llama-server binary and model (project-local)
+LLAMA_BIN="${SCRIPT_DIR}/bin/llama-server"
+LLAMA_MODEL="${SCRIPT_DIR}/models/ministral-3b.gguf"
 
 # ── Colors ───────────────────────────────────────────────────────────
 
@@ -60,7 +59,7 @@ kill_port "$BACKEND_PORT"
 
 if [[ -x "$LLAMA_BIN" && -f "$LLAMA_MODEL" ]]; then
     log "${CYAN}Starting llama-server on port ${LLM_PORT}...${RESET}"
-    LD_LIBRARY_PATH="${MAIN_REPO}/bin:${LD_LIBRARY_PATH:-}" \
+    LD_LIBRARY_PATH="${SCRIPT_DIR}/bin:${LD_LIBRARY_PATH:-}" \
         "$LLAMA_BIN" \
         -m "$LLAMA_MODEL" \
         -ngl 99 \
@@ -79,21 +78,26 @@ else
     log "${DIM}  Model:    ${LLAMA_MODEL}${RESET}"
 fi
 
-# ── 2. Install/sync backend dependencies ─────────────────────────────
+# ── 2. Install/sync dependencies (skip with --skip-deps) ─────────────
 
-log "${PURPLE}Syncing backend dependencies...${RESET}"
-cd "$SCRIPT_DIR/backend"
-uv sync --quiet
-log "${GREEN}Backend dependencies synced.${RESET}"
+if [[ "${1:-}" != "--skip-deps" ]]; then
+    log "${PURPLE}Syncing backend dependencies...${RESET}"
+    cd "$SCRIPT_DIR/backend"
+    uv sync --quiet
+    log "${GREEN}Backend dependencies synced.${RESET}"
 
-# ── 3. Install & build Next.js frontend ─────────────────────────────
+    log "${CYAN}Installing frontend dependencies...${RESET}"
+    cd "$SCRIPT_DIR/frontend"
+    npm install --silent
+    log "${GREEN}Frontend dependencies installed.${RESET}"
+else
+    log "${DIM}Skipping dependency install (--skip-deps)${RESET}"
+fi
 
-log "${CYAN}Installing frontend dependencies...${RESET}"
-cd "$SCRIPT_DIR/frontend"
-npm install --silent
-log "${GREEN}Frontend dependencies installed.${RESET}"
+# ── 3. Build Next.js frontend ────────────────────────────────────────
 
 log "${CYAN}Building Next.js frontend...${RESET}"
+cd "$SCRIPT_DIR/frontend"
 npm run build
 log "${GREEN}Frontend built.${RESET}"
 

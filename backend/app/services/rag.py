@@ -117,15 +117,35 @@ def index_for_search(
     documents: list[str] = []
     metadatas: list[dict[str, Any]] = []
 
-    # Index composite units by parent description
+    # Build lookup of unit_id -> child item IDs for enrichment
+    unit_item_ids: dict[str, set[str]] = {}
+    for unit in units:
+        uid = unit.get("id", "")
+        unit_item_ids[uid] = set(unit.get("itemIds") or [])
+
+    # Index composite units by enriched description (parent + sub-item summaries)
     for unit in units:
         parent_desc = unit.get("parentDescription") or unit.get("parentTitle") or ""
         if not parent_desc.strip():
             continue
         unit_id = unit.get("id", "")
         doc_id = f"unit:{file_id}:{unit_id}"
+
+        # Enrich with sub-item descriptions
+        child_ids = unit_item_ids.get(unit_id, set())
+        sub_descs: list[str] = []
+        for item in items:
+            item_id = item.get("id") or f"{file_id}:{item.get('sheetName', '')}:{item['row']}"
+            if item_id in child_ids:
+                desc = (item.get("description") or "").strip()
+                if desc:
+                    sub_descs.append(desc)
+        unit_doc = parent_desc
+        if sub_descs:
+            unit_doc = f"{parent_desc}\n{' | '.join(sub_descs)}"
+
         ids.append(doc_id)
-        documents.append(parent_desc)
+        documents.append(unit_doc)
         metadatas.append({
             "file_id": file_id,
             "entity_type": "unit",
@@ -135,6 +155,29 @@ def index_for_search(
             "item_number": unit.get("parentItemNumber", ""),
             "unit_price": 0.0,
             "quantity": 0.0,
+        })
+
+    # Index composite_sub items individually (previously skipped)
+    for item in items:
+        item_type = item.get("itemType", "simple")
+        if item_type != "composite_sub":
+            continue
+        item_id = item.get("id") or f"{file_id}:{item.get('sheetName', '')}:{item['row']}"
+        doc_id = f"sub:{file_id}:{item_id}"
+        full_desc = item.get("fullDescription") or item.get("description", "")
+        if not full_desc.strip():
+            continue
+        ids.append(doc_id)
+        documents.append(full_desc)
+        metadatas.append({
+            "file_id": file_id,
+            "entity_type": "item",
+            "item_id": item_id,
+            "file_date": file_date or "",
+            "unit": item.get("unit") or "",
+            "item_number": item.get("itemNumber") or "",
+            "unit_price": float(item.get("unitPrice") or 0),
+            "quantity": float(item.get("quantity") or 0),
         })
 
     # Index simple items (skip composite sub-items and section headers)

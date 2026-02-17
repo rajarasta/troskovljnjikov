@@ -11,3 +11,4 @@ export { fetchCachedMatches } from "./autopilot";
 export { suggestCompletion } from "./completion";
 export { fetchLlmSettings, updateLlmSettings, resetLlmSettings } from "./llmSettings";
 export type { AgentSettings, AllAgentSettings } from "./llmSettings";
+export { triggerPriceSearch, triggerBatchPriceSearch, fetchSearchResult, fetchSearchStatus } from "./priceSearch";

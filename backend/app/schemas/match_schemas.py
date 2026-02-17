@@ -16,12 +16,15 @@ class MatchRequest(BaseModel):
     file_id: str | None = None
     start_row: int | None = None
     end_row: int | None = None
+    use_llm_ranking: bool = False
 
 
 class MatchResult(BaseModel):
     item: BoQItemSchema
     similarity: float
     quantity_comparison: dict | None = None
+    llm_confidence: int | None = None
+    llm_reasoning: str | None = None
 
 
 class MatchGroup(BaseModel):

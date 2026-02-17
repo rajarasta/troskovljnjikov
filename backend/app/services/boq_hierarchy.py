@@ -176,10 +176,11 @@ def _is_parent_header_row(row: list[Any], column_map: dict[str, int]) -> bool:
 
 
 def merge_descriptions(descriptions: list[str]) -> str:
-    """Merge an array of description strings into one."""
-    parts = [str(d).strip() for d in descriptions]
-    joined = ' '.join(p for p in parts if len(p) > 0)
-    return re.sub(r'\s+', ' ', joined).strip()
+    """Merge an array of description strings into one, preserving paragraph structure."""
+    parts = [re.sub(r'\s+', ' ', str(d).strip()) for d in descriptions if str(d).strip()]
+    if not parts:
+        return ''
+    return '\n'.join(parts)
 
 
 def _safe_cell(row: list[Any], idx: int | None) -> Any:
@@ -343,8 +344,19 @@ def build_hierarchy(
         if re.match(r'^\d+$', desc):
             continue
 
-        # Check if it looks like a section header (all caps, short text, no numbers)
-        if len(desc) < 30 and desc == desc.upper() and not re.search(r'\d', desc):
+        # Check if it looks like a stray label (all caps, short text, no numbers, NO position number)
+        # Do NOT skip if it has a valid position number — those are real section headers
+        pos_for_caps_check = (
+            str(_safe_cell(row, column_map.get('itemNumber'))).strip()
+            if 'itemNumber' in column_map
+            else ''
+        )
+        if (
+            len(desc) < 30
+            and desc == desc.upper()
+            and not re.search(r'\d', desc)
+            and not (pos_for_caps_check and is_position_number(pos_for_caps_check))
+        ):
             continue
 
         current_item_row = r

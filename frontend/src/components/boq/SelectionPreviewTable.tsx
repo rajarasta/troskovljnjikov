@@ -9,63 +9,55 @@ interface SelectionPreviewTableProps {
   color: SelectionColor;
 }
 
-// Darker border colors for selection cards
 const BORDER_CLASSES: Record<SelectionColor, string> = {
-  cyan: "border-l-4 border-l-accent-cyan/80",
-  purple: "border-l-4 border-l-accent-purple/80",
-  amber: "border-l-4 border-l-accent-amber/80",
-  emerald: "border-l-4 border-l-accent-emerald/80",
-  rose: "border-l-4 border-l-accent-rose/80",
-  sky: "border-l-4 border-l-accent-sky/80",
+  cyan: "border-l-2 border-l-accent-cyan",
+  purple: "border-l-2 border-l-accent-purple",
+  amber: "border-l-2 border-l-accent-amber",
+  emerald: "border-l-2 border-l-accent-emerald",
+  rose: "border-l-2 border-l-accent-rose",
+  sky: "border-l-2 border-l-accent-sky",
 };
 
 export default function SelectionPreviewTable({ items, color }: SelectionPreviewTableProps) {
   if (items.length === 0) return null;
 
   return (
-    <div className="flex gap-1.5 overflow-x-auto px-2 py-1.5">
-      {items.map((item) => (
-        <div
-          key={item.id}
-          className={`
-            flex-shrink-0 w-auto min-w-[180px] max-w-[300px]
-            bg-bg-secondary/50 rounded-md
-            ${BORDER_CLASSES[color]}
-            px-1.5 py-1 text-[9px] leading-tight
-            hover:bg-bg-hover/50 transition-colors
-          `}
-        >
-          {/* Header: Item Number + Unit */}
-          <div className="flex items-center gap-2 mb-0.5 text-[8px]">
-            {item.item_number && (
-              <span className="font-mono text-text-muted">#{item.item_number}</span>
-            )}
-            {item.unit && (
-              <span className="text-text-secondary font-mono">{item.unit}</span>
-            )}
-          </div>
-
-          {/* Description */}
-          <div className="text-text-primary mb-1 leading-tight">
-            {item.description}
-          </div>
-
-          {/* Details: All in one line */}
-          <div className="flex items-center gap-2 text-[8px] font-mono">
-            <span className="text-text-primary">
-              {item.quantity ? formatNumber(item.quantity) : "-"}
-            </span>
-            <span className="text-text-muted">×</span>
-            <span className="text-text-primary">
-              {item.unit_price ? formatNumber(item.unit_price) : "-"}
-            </span>
-            <span className="text-text-muted">=</span>
-            <span className="text-text-primary font-semibold">
-              {formatNumber(item.total)}
-            </span>
-          </div>
-        </div>
-      ))}
-    </div>
+    <table className={`w-full text-[10px] border-collapse ${BORDER_CLASSES[color]}`}>
+      <thead>
+        <tr className="bg-bg-secondary/60">
+          <th className="px-1.5 py-1 text-left font-semibold text-text-muted w-[40px]">#</th>
+          <th className="px-1.5 py-1 text-left font-semibold text-text-muted">Opis</th>
+          <th className="px-1.5 py-1 text-left font-semibold text-text-muted w-[30px]">JM</th>
+          <th className="px-1.5 py-1 text-right font-semibold text-text-muted w-[50px]">Kol.</th>
+          <th className="px-1.5 py-1 text-right font-semibold text-text-muted w-[60px]">JC</th>
+          <th className="px-1.5 py-1 text-right font-semibold text-text-muted w-[60px]">Ukupno</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((item) => {
+          const isHeader = item.item_type === "section_header";
+          if (isHeader) {
+            return (
+              <tr key={item.id} className="bg-accent-cyan/10">
+                <td className="px-1.5 py-1 font-mono text-text-muted">{item.item_number ?? ""}</td>
+                <td colSpan={5} className="px-1.5 py-1 font-semibold text-text-primary">
+                  {item.description}
+                </td>
+              </tr>
+            );
+          }
+          return (
+            <tr key={item.id} className="border-t border-border-default/30 hover:bg-bg-hover/30">
+              <td className="px-1.5 py-1 font-mono text-text-muted align-top whitespace-nowrap">{item.item_number ?? ""}</td>
+              <td className="px-1.5 py-1 text-text-primary whitespace-pre-wrap break-words">{item.full_description || item.description}</td>
+              <td className="px-1.5 py-1 text-text-muted align-top whitespace-nowrap">{item.unit ?? ""}</td>
+              <td className="px-1.5 py-1 text-right font-mono text-text-primary align-top whitespace-nowrap">{formatNumber(item.quantity)}</td>
+              <td className="px-1.5 py-1 text-right font-mono text-text-primary align-top whitespace-nowrap">{item.unit_price ? formatNumber(item.unit_price) : ""}</td>
+              <td className="px-1.5 py-1 text-right font-mono text-text-primary align-top whitespace-nowrap">{item.total ? formatNumber(item.total) : ""}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }

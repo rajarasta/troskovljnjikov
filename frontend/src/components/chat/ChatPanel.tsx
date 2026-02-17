@@ -1,19 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { X, Loader2, MessageSquare } from "lucide-react";
 import { useChatPanelStore } from "@/stores/chatPanelStore";
 import { useSelectionStore } from "@/stores/selectionStore";
-import { sendChatMessageStreaming, sendChatMessageWithImage } from "@/lib/api";
+import { sendChatMessageStreaming, sendChatMessageWithImage, triggerPriceSearch, triggerBatchPriceSearch } from "@/lib/api";
+import { useSearchStore } from "@/stores/searchStore";
 import type { ChatMessage as ChatMessageType } from "@/lib/types";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 
 interface ChatPanelProps {
   panelId: string;
+  embedded?: boolean;
 }
 
-export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
+export default function ChatPanelComponent({ panelId, embedded }: ChatPanelProps) {
   const panel = useChatPanelStore((s) => s.panels.find((p) => p.id === panelId));
   const activePanelId = useChatPanelStore((s) => s.activePanelId);
   const setActive = useChatPanelStore((s) => s.setActive);
@@ -56,6 +58,38 @@ export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
     const removeSelection = useSelectionStore.getState().removeSelection;
     removeSelection(panel.selectionId);
   }, [panel]);
+
+  // Resolve selection to BoQ item IDs for search status tracking.
+  // Subscribe to selection list (stable ref) and derive IDs in useMemo to avoid
+  // creating a new array on every store update (which would cause infinite re-renders).
+  const selections = useSelectionStore((s) => s.selections);
+  const selectionItemIds = useMemo(() => {
+    if (!panel) return [] as string[];
+    const sel = selections.find((s) => s.id === panel.selectionId);
+    return sel ? sel.items.map((i) => i.id) : ([] as string[]);
+  }, [selections, panel]);
+  const isSearching = useSearchStore((s) =>
+    selectionItemIds.some((id) => s.status[id] === "searching")
+  );
+
+  const handleSearchPrices = useCallback(async () => {
+    if (!panel) return;
+    try {
+      // Resolve selection to actual BoQ item IDs (selectionId is a selection store ID, not a DB item ID)
+      const selection = useSelectionStore.getState().selections.find((s) => s.id === panel.selectionId);
+      const itemIds = selection ? selection.items.map((i) => i.id) : [];
+      if (itemIds.length === 0) return;
+
+      if (itemIds.length === 1) {
+        await triggerPriceSearch(itemIds[0]);
+      } else {
+        await triggerBatchPriceSearch(itemIds);
+      }
+    } catch (err) {
+      const store = useChatPanelStore.getState();
+      store.setError(panelId, err instanceof Error ? err.message : "Search failed");
+    }
+  }, [panel, panelId]);
 
   const handleSend = useCallback(async (content: string, image?: File) => {
     if (!panel) return;
@@ -114,6 +148,40 @@ export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
 
   if (!panel) return null;
 
+  // Embedded mode: no outer wrapper or header, used inside ChatPanelList tabs
+  if (embedded) {
+    return (
+      <div className="flex flex-col h-full overflow-hidden">
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto min-h-0">
+          {panel.messages.length === 0 && !panel.isAnalyzing ? (
+            <div className="text-[10px] text-text-muted px-3 py-2">
+              Waiting for analysis...
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1 py-1">
+              {panel.messages.map((msg) => (
+                <ChatMessage key={msg.id} message={msg} />
+              ))}
+            </div>
+          )}
+          {panel.error && (
+            <div className="mx-2 mb-1 px-2 py-1 rounded bg-status-danger/10 border border-status-danger/20 text-status-danger text-[10px]">
+              {panel.error}
+            </div>
+          )}
+        </div>
+        <div className="shrink-0 border-t border-border-default/50 px-2 py-1.5">
+          <ChatInput
+            onSend={handleSend}
+            onSearchPrices={handleSearchPrices}
+            disabled={panel.isSending || panel.isAnalyzing}
+            isSearching={isSearching}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       onClick={handleClick}
@@ -168,7 +236,12 @@ export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
       {/* Input (only shown when active) */}
       {isActive && (
         <div className="shrink-0 border-t border-border-default/50 px-2 py-1.5">
-          <ChatInput onSend={handleSend} disabled={panel.isSending || panel.isAnalyzing} />
+          <ChatInput
+            onSend={handleSend}
+            onSearchPrices={handleSearchPrices}
+            disabled={panel.isSending || panel.isAnalyzing}
+            isSearching={isSearching}
+          />
         </div>
       )}
     </div>

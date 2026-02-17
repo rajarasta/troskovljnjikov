@@ -9,12 +9,14 @@ import { pipelineHandlers } from "./wsHandlers/pipelineHandlers";
 import { autopilotHandlers } from "./wsHandlers/autopilotHandlers";
 import { chatHandlers } from "./wsHandlers/chatHandlers";
 import { agentHandlers } from "./wsHandlers/agentHandlers";
+import { searchHandlers } from "./wsHandlers/searchHandlers";
 
 const handlers: Record<string, (event: AgentEvent) => void> = {
   ...pipelineHandlers,
   ...autopilotHandlers,
   ...chatHandlers,
   ...agentHandlers,
+  ...searchHandlers,
 };
 
 export function useWebSocket() {

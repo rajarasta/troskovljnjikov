@@ -1,16 +1,25 @@
 "use client";
 
 import { useState, useCallback, useRef, type KeyboardEvent } from "react";
-import { SendHorizonal, ImagePlus, X } from "lucide-react";
+import { SendHorizonal, ImagePlus, X, Globe, Loader2 } from "lucide-react";
 
 // ── Component ───────────────────────────────────────────────────────
 
 interface ChatInputProps {
   onSend: (message: string, image?: File) => void;
+  onSearchPrices?: () => void;
   disabled?: boolean;
+  searchDisabled?: boolean;
+  isSearching?: boolean;
 }
 
-export default function ChatInput({ onSend, disabled = false }: ChatInputProps) {
+export default function ChatInput({
+  onSend,
+  onSearchPrices,
+  disabled = false,
+  searchDisabled = false,
+  isSearching = false,
+}: ChatInputProps) {
   const [value, setValue] = useState("");
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -116,6 +125,23 @@ export default function ChatInput({ onSend, disabled = false }: ChatInputProps) 
         >
           <ImagePlus className="w-4 h-4" />
         </button>
+        {onSearchPrices && (
+          <button
+            onClick={onSearchPrices}
+            disabled={disabled || searchDisabled || isSearching}
+            className="shrink-0 p-1.5 rounded transition-all duration-150
+                       disabled:opacity-30 disabled:cursor-not-allowed
+                       enabled:hover:bg-accent-purple/15 enabled:active:scale-95
+                       text-text-muted hover:text-accent-purple"
+            title="Search web prices"
+          >
+            {isSearching ? (
+              <Loader2 className="w-4 h-4 animate-spin text-accent-purple" />
+            ) : (
+              <Globe className="w-4 h-4" />
+            )}
+          </button>
+        )}
         <textarea
           ref={textareaRef}
           value={value}

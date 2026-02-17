@@ -35,6 +35,7 @@ export interface BoQItem {
   drawing_path: string | null;
   llm_response: string | null;
   file_name: string | null;
+  item_type?: string | null;
 }
 
 // ── Match Models ────────────────────────────────────────────────────
@@ -51,6 +52,8 @@ export interface MatchResult {
   item: BoQItem;
   similarity: number;
   quantity_comparison: QuantityComparison | null;
+  llm_confidence: number | null;
+  llm_reasoning: string | null;
 }
 
 export interface MatchStats {
@@ -136,6 +139,45 @@ export interface AutopilotMatchResult {
   id: string;
   similarity: number;
   metadata: Record<string, unknown>;
+}
+
+// ── Web Price Search Models ────────────────────────────────────────
+
+export type SearchStatus = "idle" | "searching" | "done" | "error";
+
+export interface WebQuote {
+  vendor: string;
+  url: string;
+  product_name: string;
+  unit_price: number;
+  currency: string;
+  unit: string;
+  pack_size: number | null;
+  pack_unit: string | null;
+  vat_included: boolean;
+  availability: string;
+  confidence: number;
+  evidence: Record<string, string>;
+  image_url: string;
+}
+
+export interface ComputedTotal {
+  quantity: number;
+  unit_price_ex_vat: number;
+  subtotal_ex_vat: number;
+  vat: number;
+  shipping_estimate: number;
+  total: number;
+  currency: string;
+  notes: string[];
+}
+
+export interface SearchResultData {
+  quotes: WebQuote[];
+  best_quote: WebQuote | null;
+  computed: ComputedTotal | null;
+  reasoning: string;
+  search_log: string[];
 }
 
 // ── Preset Models ──────────────────────────────────────────────────

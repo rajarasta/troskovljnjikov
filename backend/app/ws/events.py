@@ -42,6 +42,12 @@ AUTOPILOT_ERROR = "autopilot:error"
 CHAT_TOKEN = "chat:token"
 CHAT_COMPLETE = "chat:complete"
 
+# Web price search events
+SEARCH_STARTED = "search:started"
+SEARCH_PROGRESS = "search:progress"
+SEARCH_QUOTE_FOUND = "search:quote_found"
+SEARCH_COMPLETE = "search:complete"
+
 
 async def emit(
     event_type: str,

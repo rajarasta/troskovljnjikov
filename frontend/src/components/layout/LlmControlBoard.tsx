@@ -14,10 +14,13 @@ const CATEGORIES = [
 export default function LlmControlBoard() {
   const { agents, isLoaded, fetchAll, updateAgent, resetAgent } = useLlmSettingsStore();
   const activeAgentIds = useLlmSettingsStore((s) => s.activeAgentIds);
+  const { availableModels, currentModel, modelsLoading, modelsError, fetchModels, setModel } =
+    useLlmSettingsStore();
 
   useEffect(() => {
     if (!isLoaded) fetchAll();
-  }, [isLoaded, fetchAll]);
+    fetchModels();
+  }, [isLoaded, fetchAll, fetchModels]);
 
   if (!isLoaded) {
     return <div className="text-xs text-text-muted p-2">Loading LLM settings...</div>;
@@ -27,6 +30,33 @@ export default function LlmControlBoard() {
 
   return (
     <div className="space-y-1 max-h-[70vh] overflow-y-auto">
+      {/* Global model selector */}
+      <div className="border border-border-default rounded-md overflow-hidden mb-1">
+        <div className="px-2 py-1.5 bg-bg-tertiary">
+          <span className="text-xs font-medium text-text-secondary">Global Model</span>
+        </div>
+        <div className="px-2 py-2">
+          {modelsLoading ? (
+            <span className="text-[10px] text-text-muted">Loading models...</span>
+          ) : modelsError ? (
+            <div className="text-[10px] text-text-muted">
+              <span className="text-accent-amber">Cannot reach model server</span>
+              {currentModel && <span className="ml-1">({currentModel})</span>}
+            </div>
+          ) : (
+            <select
+              value={currentModel}
+              onChange={(e) => setModel(e.target.value)}
+              className="w-full text-xs bg-bg-primary border border-border-default rounded px-2 py-1 text-text-secondary focus:outline-none focus:border-accent-cyan/50"
+            >
+              {availableModels.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
+
       <div className="text-xs text-text-muted mb-2">Per-agent temperature, prompts & enabled toggle</div>
       {CATEGORIES.map(({ key, label }) => {
         const categoryAgents = agentEntries.filter(([, s]) => s.category === key);

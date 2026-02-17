@@ -32,7 +32,7 @@ export default function MatchResultsPanel() {
   const parentDescription = activeResult?.parentDescription ?? null;
 
   const totalMatchCount = isComposite && groups
-    ? groups.reduce((sum, g) => sum + g.matches.length, 0)
+    ? matches.length + groups.reduce((sum, g) => sum + g.matches.length, 0)
     : matches.length;
   const hasResults = totalMatchCount > 0;
 
@@ -42,13 +42,13 @@ export default function MatchResultsPanel() {
     <div className="flex flex-col gap-2 h-full min-h-0">
       {/* Panel 1: Selection preview */}
       {hasSelection && (
-        <div className="glass-panel flex flex-col h-auto shrink-0 overflow-hidden">
+        <div className="glass-panel flex flex-col h-1/5 shrink-0 overflow-hidden">
           <ColumnHeader
             title="Odabir"
             accent="cyan"
             badge={`${activeSelection.items.length}`}
           />
-          <div className="overflow-x-auto">
+          <div className="overflow-auto flex-1 min-h-0">
             <SelectionPreviewTable items={activeSelection.items} color={activeSelection.color} />
           </div>
         </div>

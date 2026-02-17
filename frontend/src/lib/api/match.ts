@@ -8,6 +8,7 @@ export async function matchItems(
   fileId?: string,
   startRow?: number,
   endRow?: number,
+  useLlmRanking?: boolean,
 ): Promise<MatchResponse> {
   return fetchAPI<MatchResponse>("/api/match", {
     method: "POST",
@@ -18,6 +19,7 @@ export async function matchItems(
       ...(fileId !== undefined && { file_id: fileId }),
       ...(startRow !== undefined && { start_row: startRow }),
       ...(endRow !== undefined && { end_row: endRow }),
+      ...(useLlmRanking !== undefined && { use_llm_ranking: useLlmRanking }),
     }),
   });
 }

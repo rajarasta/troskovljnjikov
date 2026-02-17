@@ -60,12 +60,12 @@ async def upload_drawing(
 
 
 @router.post("/match", response_model=MatchResponse)
-def match_items(
+async def match_items(
     req: MatchRequest,
     db: Session = Depends(get_db),
 ):
     """Search for historical price data via RAG against request description."""
-    return find_matches(req, db)
+    return await find_matches(req, db)
 
 
 @router.post("/price-history", response_model=PriceHistoryResponse)

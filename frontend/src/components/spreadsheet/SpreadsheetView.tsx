@@ -127,7 +127,21 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
         setDragAnchor(null);
       }
       if (dragAnchorIndex !== null && dragAnchorIndex === index) {
-        addSelection(index, index, items.slice(index, index + 1));
+        // Auto-expand section headers to include their sub-items
+        const clickedItem = items[index];
+        if (clickedItem?.item_type === "section_header" && clickedItem.item_number) {
+          let endIdx = index;
+          for (let i = index + 1; i < items.length; i++) {
+            if (items[i].parent_item_number === clickedItem.item_number) {
+              endIdx = i;
+            } else if (items[i].item_type === "section_header") {
+              break;
+            }
+          }
+          addSelection(index, endIdx, items.slice(index, endIdx + 1));
+        } else {
+          addSelection(index, index, items.slice(index, index + 1));
+        }
         setDragAnchor(null);
       }
     },

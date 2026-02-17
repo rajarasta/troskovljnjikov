@@ -171,9 +171,6 @@ def extract_items_from_sheet(
 
     items: list[dict[str, Any]] = []
     for hi in hierarchy_items:
-        # Skip pure parent headers with no data
-        if hi.get("isParent") and not hi.get("quantity") and not hi.get("unitPrice") and not hi.get("total"):
-            continue
 
         item: dict[str, Any] = {
             "id": f"{file_path}:{sheet_name}:{hi['row']}",

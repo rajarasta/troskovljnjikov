@@ -36,3 +36,23 @@ export async function resetLlmSettings(agentId: string): Promise<AgentSettings> 
     method: "POST",
   });
 }
+
+// ---------------------------------------------------------------------------
+// Global model selection
+// ---------------------------------------------------------------------------
+
+export interface AvailableModelsResponse {
+  models: string[];
+  current: string;
+}
+
+export async function fetchAvailableModels(): Promise<AvailableModelsResponse> {
+  return fetchAPI<AvailableModelsResponse>("/api/llm-settings/global/models");
+}
+
+export async function setCurrentModel(modelName: string): Promise<{ model: string }> {
+  return fetchAPI<{ model: string }>("/api/llm-settings/global/model", {
+    method: "PUT",
+    body: JSON.stringify({ model_name: modelName }),
+  });
+}

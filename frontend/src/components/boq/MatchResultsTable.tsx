@@ -67,8 +67,13 @@ function MatchRow({ match, wrapText, refQty, refPrice }: { match: MatchResult; w
           <span className="text-[9px] font-mono text-text-muted">
             {pct}%
           </span>
+          {match.llm_confidence != null && (
+            <span className="text-[9px] font-mono text-accent-amber" title={match.llm_reasoning ?? ""}>
+              LLM:{match.llm_confidence}
+            </span>
+          )}
           {item.file_name && (
-            <span className="text-[9px] text-accent-cyan truncate max-w-[120px]" title={item.file_name}>
+            <span className="text-[9px] text-accent-purple truncate max-w-[120px]" title={item.file_name}>
               {item.file_name}
             </span>
           )}
@@ -187,10 +192,39 @@ export default function MatchResultsTable({
                 </tr>
               )}
 
-              {/* Per-group: sub-item header + match rows */}
-              {groups.map((group) => (
-                <GroupRows key={group.sub_item.id} group={group} wrapText={wrapText} refQty={refQty} refPrice={refPrice} />
-              ))}
+              {/* Level 1: Unit-level matches (whole matching units from history) */}
+              {matches.length > 0 && (
+                <>
+                  <tr>
+                    <td
+                      colSpan={COL_COUNT}
+                      className="border border-accent-emerald/30 bg-accent-emerald/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-accent-emerald"
+                    >
+                      Unit Matches ({matches.length})
+                    </td>
+                  </tr>
+                  {matches.map((match) => (
+                    <MatchRow key={match.item.id} match={match} wrapText={wrapText} refQty={refQty} refPrice={refPrice} />
+                  ))}
+                </>
+              )}
+
+              {/* Level 2: Per-sub-item matches */}
+              {groups.length > 0 && (
+                <>
+                  <tr>
+                    <td
+                      colSpan={COL_COUNT}
+                      className="border border-accent-purple/30 bg-accent-purple/5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-accent-purple"
+                    >
+                      Sub-Item Matches
+                    </td>
+                  </tr>
+                  {groups.map((group) => (
+                    <GroupRows key={group.sub_item.id} group={group} wrapText={wrapText} refQty={refQty} refPrice={refPrice} />
+                  ))}
+                </>
+              )}
             </>
           ) : (
             matches.map((match) => (

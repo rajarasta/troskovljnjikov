@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import ReactMarkdown from "react-markdown";
 import type { ChatMessage as ChatMessageType } from "@/lib/types";
 
 // ── Variants ────────────────────────────────────────────────────────
@@ -77,9 +78,13 @@ export default function ChatMessage({ message }: ChatMessageProps) {
             className="max-w-full max-h-40 rounded border border-border-default/50 mb-1 object-contain"
           />
         )}
-        <p className="whitespace-pre-wrap break-words leading-snug">
-          {content}
-        </p>
+        {isUser ? (
+          <p className="whitespace-pre-wrap break-words leading-snug">{content}</p>
+        ) : (
+          <div className="prose-chat leading-snug break-words">
+            <ReactMarkdown>{content}</ReactMarkdown>
+          </div>
+        )}
         <span
           className={`
             text-[9px] font-mono mt-0.5 block

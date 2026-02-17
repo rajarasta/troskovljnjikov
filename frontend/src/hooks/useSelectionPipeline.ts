@@ -49,7 +49,12 @@ export function useSelectionPipeline() {
           : `Rows ${selection.items[0]?.item_number ?? selection.startIndex}\u2013${selection.items[selection.items.length - 1]?.item_number ?? selection.endIndex}`;
 
       // 1. Match lookup — check autopilot cache first for single-item selections
-      const combinedDesc = descriptions.join("\n");
+      const combinedDesc = selection.items.length === 1
+        ? (selection.items[0].full_description || selection.items[0].description)
+        : selection.items
+            .filter((i) => i.item_type !== "section_header")
+            .map((i) => i.full_description || i.description)
+            .join(" | ");
       const qty = selection.items[0]?.quantity ?? 0;
       const fileId = selection.items[0]?.file_id || undefined;
       const startRow = Math.min(...selection.items.map((i) => i.row));
