@@ -174,6 +174,7 @@ async def search_domain(
     """
     import json
 
+    logger.debug(f"🔍 [Tool] search_domain called: domain={domain}, query={query[:50]}")
     ctx.deps._search_log.append(f"Searching {domain} for: {query}")
 
     search_url = get_search_url(domain, quote_plus(query))
@@ -227,6 +228,7 @@ async def fetch_and_extract(
     """
     import json
 
+    logger.debug(f"🔍 [Tool] fetch_and_extract called: url={url[:80]}")
     if not is_approved(url):
         return json.dumps({"error": f"URL not on approved domain: {url}"})
 
@@ -304,6 +306,7 @@ async def rag_lookup(
     """
     import json
 
+    logger.debug(f"🔍 [Tool] rag_lookup called: query={query[:50]}")
     ctx.deps._search_log.append(f"RAG lookup: {query}")
 
     try:
@@ -360,6 +363,7 @@ async def run_price_search(
     SearchResult
         Structured result with quotes, best quote, computed total, and reasoning.
     """
+    logger.info(f"🔍 Starting price search for: {description[:100]}")
     rules = pricing_rules or PricingRules()
     deps = SearchDeps(
         description=description,
@@ -379,6 +383,7 @@ async def run_price_search(
     )
 
     output = result.output
+    logger.info(f"🔍 Search agent returned: quotes={len(output.quotes)}, search_log_entries={len(output.search_log)}")
 
     # Merge tool-collected quotes into the result
     if deps._quotes and not output.quotes:
