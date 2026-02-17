@@ -405,15 +405,13 @@ export default function PriceSearchModal({ isOpen, onClose }: PriceSearchModalPr
   // Determine what we're searching
   const selectedItems = useMemo(() => {
     if (selections.length > 0) {
-      // Multi-selection from spreadsheet
-      const ids = new Set(selections.flatMap((s) => {
-        return s.items.map((item) => item.id);
-      }));
-      return items.filter((i) => ids.has(i.id));
+      // Multi-selection from spreadsheet - use items directly from selections
+      // This preserves synthetic item data (like descriptions for Excel cells)
+      return selections.flatMap((s) => s.items);
     }
     if (selectedRow) return [selectedRow];
     return [];
-  }, [selections, selectedRow, items]);
+  }, [selections, selectedRow]);
 
   const isSingleItem = selectedItems.length === 1;
   const isMultiItem = selectedItems.length > 1;
