@@ -256,3 +256,99 @@ def delete_all() -> None:
     global _collection
     _client.delete_collection(_COLLECTION_NAME)
     _collection = None  # Force re-creation on next access
+
+
+def get_collection_stats() -> dict[str, Any]:
+    """Get statistics about the current ChromaDB collection.
+
+    Returns:
+        Dictionary with collection metadata and size info
+    """
+    try:
+        collection = _get_collection()
+        count = collection.count()
+        return {
+            "collection_name": _COLLECTION_NAME,
+            "item_count": count,
+            "db_path": "./data/chromadb",
+        }
+    except Exception as e:
+        logger.error(f"Failed to get collection stats: {e}")
+        return {"error": str(e)}
+
+
+def cleanup_by_file_date(days_old: int = 90) -> int:
+    """
+    Remove indexed items older than specified days.
+
+    This helps prevent unbounded database growth in production.
+
+    Args:
+        days_old: Number of days; items older than this are removed
+
+    Returns:
+        Number of items removed (approximate)
+    """
+    from datetime import datetime, timedelta
+
+    try:
+        collection = _get_collection()
+        cutoff_date = (datetime.utcnow() - timedelta(days=days_old)).isoformat()
+
+        # Delete items older than cutoff date
+        # Note: ChromaDB doesn't support date range deletes directly,
+        # so this is a best-effort approach using metadata filtering
+        collection.delete(
+            where={"file_date": {"$lt": cutoff_date}}
+        )
+
+        logger.info(f"Cleaned up ChromaDB items older than {days_old} days (cutoff: {cutoff_date})")
+        return collection.count()
+    except Exception as e:
+        logger.error(f"Failed to cleanup ChromaDB: {e}")
+        return 0
+
+
+def cleanup_orphaned_files(active_file_ids: set[str]) -> int:
+    """
+    Remove all indexed items for files that no longer exist in the database.
+
+    This prevents orphaned data from accumulating.
+
+    Args:
+        active_file_ids: Set of file IDs that should be kept
+
+    Returns:
+        Approximate number of items removed
+    """
+    try:
+        collection = _get_collection()
+        initial_count = collection.count()
+
+        # Get all metadata to identify orphaned files
+        all_items = collection.get(limit=100000)
+        orphaned_file_ids = set()
+
+        if all_items and all_items.get("metadatas"):
+            for metadata in all_items["metadatas"]:
+                file_id = metadata.get("file_id")
+                if file_id and file_id not in active_file_ids:
+                    orphaned_file_ids.add(file_id)
+
+        # Delete items for orphaned files
+        removed_count = 0
+        for file_id in orphaned_file_ids:
+            try:
+                collection.delete(where={"file_id": file_id})
+                removed_count += 1
+                logger.info(f"Removed orphaned file {file_id} from ChromaDB index")
+            except Exception as e:
+                logger.error(f"Failed to delete orphaned file {file_id}: {e}")
+
+        final_count = collection.count()
+        logger.info(f"ChromaDB cleanup: {initial_count} -> {final_count} items")
+        return initial_count - final_count
+
+    except Exception as e:
+        logger.error(f"Failed to cleanup orphaned files: {e}")
+        return 0

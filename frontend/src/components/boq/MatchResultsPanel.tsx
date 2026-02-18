@@ -36,6 +36,10 @@ export default function MatchResultsPanel() {
     : matches.length;
   const hasResults = totalMatchCount > 0;
 
+  const avgTotal = matches.length > 0
+    ? matches.reduce((sum, m) => sum + (m.item.total ?? 0), 0) / matches.length
+    : null;
+
   const hasSelection = activeSelection && activeSelection.items.length > 0;
 
   return (
@@ -84,7 +88,7 @@ export default function MatchResultsPanel() {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto min-h-0">
+        <div className="flex-1 overflow-y-auto min-h-0 pr-1">
           {isSearching ? (
             <div className="flex items-center justify-center h-full gap-2 text-text-secondary text-xs">
               <Search className="w-4 h-4 animate-pulse text-accent-purple" />
@@ -104,8 +108,9 @@ export default function MatchResultsPanel() {
               groups={groups}
               isComposite={isComposite}
               parentDescription={parentDescription}
-              refQty={activeSelection?.items[0]?.quantity ?? null}
-              refPrice={activeSelection?.items[0]?.unit_price ?? null}
+              refQty={activeSelection?.items[0]?.quantity || null}
+              refPrice={activeSelection?.items[0]?.unit_price || stats?.avgPrice || null}
+              refTotal={activeSelection?.items[0]?.total || avgTotal}
             />
           )}
         </div>

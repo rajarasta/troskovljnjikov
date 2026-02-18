@@ -2,6 +2,10 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # Environment & Debugging
+    DEBUG: bool = False
+    AUTH_ENABLED: bool = False  # Set to True to require API key authentication
+
     # Database
     DATABASE_URL: str = "sqlite:///./data/boq.db"
 
@@ -27,6 +31,13 @@ class Settings(BaseSettings):
     MAX_API_REQUESTS_PER_MINUTE: int = 50
     MAX_TOKENS_PER_DAY: int = 1_000_000
     MAX_COST_PER_DAY_USD: float = 10.0
+
+    # Agent Skills Configuration
+    ENABLE_PDF_SKILL: bool = True
+    ENABLE_DOCX_SKILL: bool = True
+    ENABLE_XLSX_SKILL: bool = True
+    ENABLE_PPTX_SKILL: bool = False
+    SEARCH_AGENT_SKILLS: list[str] = ["pdf_extract", "xlsx_handler", "docx_handler"]
 
     model_config = {"env_file": ".env"}
 

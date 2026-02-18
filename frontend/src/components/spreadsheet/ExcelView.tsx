@@ -15,6 +15,55 @@ import UniverPresetSheetsDrawingEnUS from "@univerjs/preset-sheets-drawing/local
 import "@univerjs/preset-sheets-core/lib/index.css";
 import "@univerjs/preset-sheets-drawing/lib/index.css";
 
+/**
+ * Try to detect quantity and unit_price columns from row data
+ * by matching header names and value patterns (Croatian/English)
+ */
+function extractPriceDataFromRow(
+  rowData: string[],
+  headerRow?: string[],
+): { quantity: number; unit_price: number } {
+  const result = { quantity: 0, unit_price: 0 };
+
+  if (!headerRow || headerRow.length === 0) return result;
+
+  // Look for columns matching common naming patterns (Croatian/English)
+  const quantityPatterns = ["kol", "količina", "qty", "quantity", "kolicina"];
+  const pricePatterns = ["cijena", "jc", "jed", "price", "unit price", "jedinična", "cijena"];
+  const totalPatterns = ["ukupno", "total", "uc", "ukupno"];
+
+  for (let i = 0; i < Math.min(headerRow.length, rowData.length); i++) {
+    const header = headerRow[i]?.toLowerCase().trim() ?? "";
+    const value = rowData[i]?.trim() ?? "";
+
+    // Skip empty values
+    if (!value) continue;
+
+    // Try to parse as number
+    const numValue = parseFloat(value.replace(/[^\d.,]/g, "").replace(",", "."));
+    if (isNaN(numValue) || numValue === 0) continue;
+
+    // Match quantity column (prioritize first match)
+    if (
+      result.quantity === 0 &&
+      quantityPatterns.some((p) => header.includes(p))
+    ) {
+      result.quantity = numValue;
+    }
+
+    // Match unit price column (but not total)
+    if (
+      result.unit_price === 0 &&
+      pricePatterns.some((p) => header.includes(p)) &&
+      !totalPatterns.some((t) => header.includes(t))
+    ) {
+      result.unit_price = numValue;
+    }
+  }
+
+  return result;
+}
+
 /** Apply or remove text wrap on every cell across all sheets */
 function applyWrapToAllSheets(univerAPI: ReturnType<typeof createUniver>["univerAPI"]) {
   try {
@@ -34,8 +83,12 @@ function applyWrapToAllSheets(univerAPI: ReturnType<typeof createUniver>["univer
 
 export default function ExcelView({ wrapAll = true }: { wrapAll?: boolean }) {
   const selectedFileId = useBoQStore((s) => s.selectedFileId);
+  const files = useBoQStore((s) => s.files);
   const addSelection = useSelectionStore((s) => s.addSelection);
   const removeSelection = useSelectionStore((s) => s.removeSelection);
+
+  // Find current file to access raw_preview and header_rows
+  const currentFile = files.find((f) => f.id === selectedFileId);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const univerRef = useRef<ReturnType<typeof createUniver> | null>(null);
@@ -133,31 +186,58 @@ export default function ExcelView({ wrapAll = true }: { wrapAll?: boolean }) {
               excelSelectionIdRef.current = null;
             }
 
-            // Build synthetic BoQItems from cell data
-            const syntheticItems: BoQItem[] = cellData.map((cell) => ({
-              id: `excel-cell-${cell.row}-${cell.col}-${Date.now()}`,
-              file_id: selectedFileId!,
-              sheet_name: null,
-              row: cell.row,
-              item_number: null,
-              description: cell.text,
-              full_description: null,
-              parent_item_number: null,
-              unit: null,
-              quantity: 0,
-              unit_price: 0,
-              total: 0,
-              project_name: null,
-              date: null,
-              material_price: null,
-              labor_price: null,
-              material_total: null,
-              labor_total: null,
-              notes: null,
-              drawing_path: null,
-              llm_response: null,
-              file_name: null,
-            }));
+            // Get header row and raw preview for price extraction
+            const sheetName = worksheet?.constructor?.name; // Try to get sheet name
+            const headerRowIndex = currentFile?.header_rows ? Object.values(currentFile.header_rows)[0] : 0;
+            const rawPreview = currentFile?.raw_preview ? Object.values(currentFile.raw_preview)[0] : null;
+            const headerRow = rawPreview && headerRowIndex !== undefined ? rawPreview[headerRowIndex] : undefined;
+
+            // Group cells by row to extract price data per row
+            const rowMap = new Map<number, { cells: typeof cellData; priceData: ReturnType<typeof extractPriceDataFromRow> }>();
+            for (const cell of cellData) {
+              if (!rowMap.has(cell.row)) {
+                const rowCells: typeof cellData = [];
+                // Collect all cells in this row from raw preview
+                if (rawPreview && cell.row < rawPreview.length) {
+                  const rowData = rawPreview[cell.row];
+                  const priceData = extractPriceDataFromRow(rowData, headerRow);
+                  rowMap.set(cell.row, { cells: [cell], priceData });
+                } else {
+                  rowMap.set(cell.row, { cells: [cell], priceData: { quantity: 0, unit_price: 0 } });
+                }
+              } else {
+                rowMap.get(cell.row)!.cells.push(cell);
+              }
+            }
+
+            // Build synthetic BoQItems from grouped row data
+            const syntheticItems: BoQItem[] = Array.from(rowMap.entries()).flatMap(
+              ([rowNum, { cells, priceData }]) =>
+                cells.map((cell) => ({
+                  id: `excel-cell-${cell.row}-${cell.col}-${Date.now()}`,
+                  file_id: selectedFileId!,
+                  sheet_name: null,
+                  row: cell.row,
+                  item_number: null,
+                  description: cell.text,
+                  full_description: null,
+                  parent_item_number: null,
+                  unit: null,
+                  quantity: priceData.quantity,
+                  unit_price: priceData.unit_price,
+                  total: priceData.quantity * priceData.unit_price,
+                  project_name: null,
+                  date: null,
+                  material_price: null,
+                  labor_price: null,
+                  material_total: null,
+                  labor_total: null,
+                  notes: null,
+                  drawing_path: null,
+                  llm_response: null,
+                  file_name: null,
+                }))
+            );
 
             // Debug: log synthetic items with their descriptions
             console.log("📊 ExcelView cellData:", cellData);

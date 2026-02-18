@@ -20,15 +20,18 @@ const ExcelView = dynamic(() => import("@/components/spreadsheet/ExcelView"), {
 });
 
 export default function BoqViewSwitcher() {
-  const { items } = useBoQStore();
+  const { items, selectedFileId, files } = useBoQStore();
   const [boqViewMode, setBoqViewMode] = useState<"parsed" | "raw" | "excel">("parsed");
   const [excelWrap, setExcelWrap] = useState(true);
   const boqScrollRef = useRef<HTMLDivElement>(null);
 
+  const selectedFile = files.find((f) => f.id === selectedFileId);
+  const title = selectedFile ? `BOQ • ${selectedFile.file_name}` : "BOQ";
+
   return (
     <div className="glass-panel flex flex-col min-h-0 h-full">
       <ColumnHeader
-        title="BOQ"
+        title={title}
         accent="cyan"
         badge={`${items.length} items`}
         actions={

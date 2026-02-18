@@ -1,9 +1,6 @@
 "use client";
 
-import { Check } from "lucide-react";
 import { formatNumber } from "@/lib/boqTableConfig";
-import { useBoQStore } from "@/stores/boqStore";
-import { useSelectionStore } from "@/stores/selectionStore";
 import { useFilePreviewStore } from "@/stores/filePreviewStore";
 import type { MatchResult, MatchGroup } from "@/lib/types";
 
@@ -14,7 +11,6 @@ const COLUMNS = [
   { key: "quantity", label: "Kol.", width: "46px", align: "right" as const },
   { key: "unit_price", label: "JC [\u20ac]", width: "62px", align: "right" as const },
   { key: "total", label: "UC [\u20ac]", width: "62px", align: "right" as const },
-  { key: "apply", label: "", width: "28px", align: "center" as const },
 ] as const;
 
 const COL_COUNT = COLUMNS.length;
@@ -27,27 +23,31 @@ interface Props {
   parentDescription?: string | null;
   refQty?: number | null;
   refPrice?: number | null;
+  refTotal?: number | null;
 }
 
-function mulLabel(ref: number | null | undefined, val: number): string | null {
+/** Show percentage difference: (matchVal - refVal) / refVal * 100 */
+function pctDiffLabel(ref: number | null | undefined, val: number): string | null {
   if (!ref || ref === 0 || !val) return null;
-  const r = val / ref;
-  if (Math.abs(r - 1) < 0.005) return null;
-  return `${r.toFixed(1)}x`;
+  const pct = ((val - ref) / ref) * 100;
+  if (Math.abs(pct) < 0.5) return null;
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${Math.round(pct)}%`;
 }
 
-function mulColor(ref: number, val: number): string {
-  const r = val / ref;
-  if (r >= 0.9 && r <= 1.1) return "text-green-400";
-  if (r >= 0.5 && r <= 2.0) return "text-amber-400";
+function pctDiffColor(ref: number, val: number): string {
+  const pct = Math.abs(((val - ref) / ref) * 100);
+  if (pct <= 10) return "text-green-400";
+  if (pct <= 50) return "text-amber-400";
   return "text-red-400";
 }
 
-function MatchRow({ match, wrapText, refQty, refPrice }: { match: MatchResult; wrapText: boolean; refQty?: number | null; refPrice?: number | null }) {
+function MatchRow({ match, wrapText, refQty, refPrice, refTotal }: { match: MatchResult; wrapText: boolean; refQty?: number | null; refPrice?: number | null; refTotal?: number | null }) {
   const { item, similarity } = match;
   const pct = Math.round((similarity ?? 0) * 100);
-  const qtyMul = mulLabel(refQty, item.quantity ?? 0);
-  const priceMul = mulLabel(refPrice, item.unit_price ?? 0);
+  const qtyDiff = pctDiffLabel(refQty, item.quantity ?? 0);
+  const priceDiff = pctDiffLabel(refPrice, item.unit_price ?? 0);
+  const totalDiff = pctDiffLabel(refTotal, item.total ?? 0);
 
   return (
     <tr className="hover:bg-bg-hover transition-colors duration-100">
@@ -105,47 +105,29 @@ function MatchRow({ match, wrapText, refQty, refPrice }: { match: MatchResult; w
       </td>
 
       {/* Kol. */}
-      <td className="border border-border-default px-1 py-1 text-right font-mono text-[10px] text-text-primary whitespace-nowrap align-top">
-        {formatNumber(item.quantity ?? 0)}
-        {qtyMul && (
-          <div className={`text-[8px] ${mulColor(refQty!, item.quantity ?? 0)}`}>{qtyMul}</div>
+      <td className="border border-border-default px-1 py-1 text-right font-mono text-[10px] text-text-primary whitespace-nowrap align-bottom">
+        {qtyDiff && (
+          <div className={`text-[8px] ${pctDiffColor(refQty!, item.quantity ?? 0)}`}>{qtyDiff}</div>
         )}
+        {formatNumber(item.quantity ?? 0)}
       </td>
 
       {/* JC */}
-      <td className="border border-border-default px-1 py-1 text-right font-mono text-[10px] text-text-primary whitespace-nowrap align-top">
-        {formatNumber(item.unit_price ?? 0)}
-        {priceMul && (
-          <div className={`text-[8px] ${mulColor(refPrice!, item.unit_price ?? 0)}`}>{priceMul}</div>
+      <td className="border border-border-default px-1 py-1 text-right font-mono text-[10px] text-text-primary whitespace-nowrap align-bottom">
+        {priceDiff && (
+          <div className={`text-[8px] ${pctDiffColor(refPrice!, item.unit_price ?? 0)}`}>{priceDiff}</div>
         )}
+        {formatNumber(item.unit_price ?? 0)}
       </td>
 
       {/* UC */}
-      <td className="border border-border-default px-1 py-1 text-right font-mono text-[10px] text-text-primary whitespace-nowrap align-top">
+      <td className="border border-border-default px-1 py-1 text-right font-mono text-[10px] text-text-primary whitespace-nowrap align-bottom">
+        {totalDiff && (
+          <div className={`text-[8px] ${pctDiffColor(refTotal!, item.total ?? 0)}`}>{totalDiff}</div>
+        )}
         {formatNumber(item.total ?? 0)}
       </td>
 
-      {/* Apply */}
-      <td className="border border-border-default px-0.5 py-1 text-center align-top">
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            // Find the active selection's first item and apply the match price
-            const activeSelId = useSelectionStore.getState().activeSelectionId;
-            const activeSel = useSelectionStore.getState().selections.find((s) => s.id === activeSelId);
-            const targetItem = activeSel?.items[0];
-            if (targetItem && item.unit_price != null) {
-              useBoQStore.getState().updateWorkingItem(targetItem.id, {
-                unit_price: item.unit_price,
-              });
-            }
-          }}
-          className="p-0.5 rounded hover:bg-accent-emerald/20 text-text-muted hover:text-accent-emerald transition-colors"
-          title="Apply this price"
-        >
-          <Check className="w-3 h-3" />
-        </button>
-      </td>
     </tr>
   );
 }
@@ -158,6 +140,7 @@ export default function MatchResultsTable({
   parentDescription,
   refQty,
   refPrice,
+  refTotal,
 }: Props) {
   return (
     <div>
@@ -216,7 +199,7 @@ export default function MatchResultsTable({
                     </td>
                   </tr>
                   {matches.map((match) => (
-                    <MatchRow key={match.item.id} match={match} wrapText={wrapText} refQty={refQty} refPrice={refPrice} />
+                    <MatchRow key={match.item.id} match={match} wrapText={wrapText} refQty={refQty} refPrice={refPrice} refTotal={refTotal} />
                   ))}
                 </>
               )}
@@ -233,14 +216,14 @@ export default function MatchResultsTable({
                     </td>
                   </tr>
                   {groups.map((group) => (
-                    <GroupRows key={group.sub_item.id} group={group} wrapText={wrapText} refQty={refQty} refPrice={refPrice} />
+                    <GroupRows key={group.sub_item.id} group={group} wrapText={wrapText} refQty={refQty} refPrice={refPrice} refTotal={refTotal} />
                   ))}
                 </>
               )}
             </>
           ) : (
             matches.map((match) => (
-              <MatchRow key={match.item.id} match={match} wrapText={wrapText} refQty={refQty} refPrice={refPrice} />
+              <MatchRow key={match.item.id} match={match} wrapText={wrapText} refQty={refQty} refPrice={refPrice} refTotal={refTotal} />
             ))
           )}
         </tbody>
@@ -249,7 +232,7 @@ export default function MatchResultsTable({
   );
 }
 
-function GroupRows({ group, wrapText, refQty, refPrice }: { group: MatchGroup; wrapText: boolean; refQty?: number | null; refPrice?: number | null }) {
+function GroupRows({ group, wrapText, refQty, refPrice, refTotal }: { group: MatchGroup; wrapText: boolean; refQty?: number | null; refPrice?: number | null; refTotal?: number | null }) {
   const sub = group.sub_item;
 
   return (
@@ -278,7 +261,7 @@ function GroupRows({ group, wrapText, refQty, refPrice }: { group: MatchGroup; w
 
       {/* Match rows for this sub-item */}
       {group.matches.map((match) => (
-        <MatchRow key={match.item.id} match={match} wrapText={wrapText} refQty={refQty} refPrice={refPrice} />
+        <MatchRow key={match.item.id} match={match} wrapText={wrapText} refQty={refQty} refPrice={refPrice} refTotal={refTotal} />
       ))}
 
       {/* Empty state for sub-item with no matches */}

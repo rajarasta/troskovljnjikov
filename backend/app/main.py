@@ -50,9 +50,15 @@ class CatchAllMiddleware:
                 scope.get("path", "?"),
             )
             if not response_started:
+                # Don't expose error details in production
+                error_detail = "Internal server error"
+                # Only include details in development mode
+                if settings.DEBUG:
+                    error_detail = f"Internal server error: {type(exc).__name__}"
+
                 response = JSONResponse(
                     status_code=500,
-                    content={"detail": f"Internal server error: {exc}"},
+                    content={"detail": error_detail},
                 )
                 await response(scope, receive, original_send)
 
@@ -120,4 +126,4 @@ async def websocket_endpoint(websocket: WebSocket):
             # Clients can send pings or commands; we discard them for now.
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)

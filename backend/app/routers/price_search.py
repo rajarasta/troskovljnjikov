@@ -39,6 +39,9 @@ router = APIRouter()
 _result_cache: dict[str, SearchResult] = {}
 _status_cache: dict[str, str] = {}  # item_id -> "searching" | "done" | "error"
 
+# Rate limiter: allow max 2 concurrent price searches to prevent API overload
+_search_semaphore = asyncio.Semaphore(2)
+
 
 # ---------------------------------------------------------------------------
 # Request models
@@ -248,13 +251,40 @@ async def _run_search_task(
             include_shipping=include_shipping,
         )
 
-        result = await run_price_search(
-            description=description,
-            unit=unit,
-            quantity=quantity,
-            file_id=file_id,
-            pricing_rules=rules,
-        )
+        # Retry logic for 529 overload errors
+        max_retries = 3
+        base_delay = 2  # seconds
+        result = None
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                # Use semaphore to limit concurrent searches
+                async with _search_semaphore:
+                    result = await run_price_search(
+                        description=description,
+                        unit=unit,
+                        quantity=quantity,
+                        file_id=file_id,
+                        pricing_rules=rules,
+                    )
+                break  # Success, exit retry loop
+            except Exception as e:
+                last_error = e
+                # Check if it's a 529 overload error
+                if "529" in str(e) or "overload" in str(e).lower():
+                    if attempt < max_retries - 1:
+                        # Exponential backoff: 2s, 4s, 8s
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(f"Price search overloaded for {item_id}, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(delay)
+                        continue
+                # For non-overload errors, raise immediately
+                raise
+
+        # Check if all retries failed
+        if result is None:
+            raise last_error or Exception("Price search failed after all retries")
 
         # Emit individual quotes
         for quote in result.quotes:
@@ -279,9 +309,13 @@ async def _run_search_task(
     except Exception as exc:
         logger.exception("Price search failed for %s", item_id)
         _status_cache[item_id] = "error"
+        error_msg = str(exc)
+        # Make overload errors more user-friendly
+        if "529" in error_msg or "overload" in error_msg.lower():
+            error_msg = "API temporarily overloaded. Please try again in a few moments."
         await emit(SEARCH_COMPLETE, {
             "item_id": item_id,
-            "error": str(exc),
+            "error": error_msg,
             "search_log": [],
         })
 

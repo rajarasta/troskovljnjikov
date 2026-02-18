@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import base64
+import io
 import logging
 from typing import Any
+
+from PIL import Image
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic_ai import Agent
@@ -41,6 +44,27 @@ chat_agent = Agent(
         "If the item context is provided, use it to give informed answers."
     ),
 )
+
+
+_IMAGE_MAX_DIM = 768  # px – longest side after resize
+_IMAGE_JPEG_QUALITY = 75
+
+
+def _compress_image(raw: bytes, content_type: str) -> tuple[str, str]:
+    """Resize and compress an uploaded image, return (b64_string, mime_type)."""
+    img = Image.open(io.BytesIO(raw))
+    img = img.convert("RGB")  # ensure no alpha for JPEG
+
+    # Resize if larger than max dimension
+    w, h = img.size
+    if max(w, h) > _IMAGE_MAX_DIM:
+        scale = _IMAGE_MAX_DIM / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=_IMAGE_JPEG_QUALITY, optimize=True)
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return b64, "image/jpeg"
 
 
 def _build_item_context(item: BoQItem) -> str:
@@ -163,10 +187,9 @@ async def send_chat_message_with_image(
 ) -> ChatMessage:
     """Send a user message with an attached image through the LLM."""
     try:
-        # Read and encode image
+        # Read, resize, and compress image to reduce token count
         image_bytes = await image.read()
-        b64_string = base64.b64encode(image_bytes).decode("ascii")
-        content_type = image.content_type or "image/jpeg"
+        b64_string, content_type = _compress_image(image_bytes, image.content_type or "image/jpeg")
 
         # Build item context (same as text-only endpoint)
         if item_id.startswith("sel-"):

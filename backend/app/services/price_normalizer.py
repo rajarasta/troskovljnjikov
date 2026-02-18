@@ -2,11 +2,18 @@
 
 All math is done here, not by the LLM. The agent decides *which* data to use;
 this module computes the numbers.
+
+Supports regional currencies:
+- EUR (Euro) - Croatia, Slovenia, Montenegro
+- HRK (Kuna) - Croatia (legacy, being phased out)
+- RSD (Serbian Dinar) - Serbia
+- BAM (Bosnian Convertible Mark) - Bosnia and Herzegovina
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from app.services.price_extractor import PriceField
 
@@ -14,6 +21,64 @@ from app.services.price_extractor import PriceField
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
+
+# Regional VAT rates
+VAT_RATES = {
+    "HR": 0.25,  # Croatian PDV
+    "SI": 0.22,  # Slovenian DDV
+    "RS": 0.20,  # Serbian PDV
+    "BA": 0.17,  # Bosnian PDV
+    "ME": 0.21,  # Montenegrin PDV
+    "MK": 0.18,  # Macedonian DDV
+}
+
+# Fixed exchange rates (as of 2024-2025)
+# Croatia adopted EUR on 2023-01-01 with fixed rate 7.53450
+EUR_TO_HRK = 7.53450
+EUR_TO_RSD = 117.43  # Approximate, fluctuates
+EUR_TO_BAM = 1.95583  # Fixed (Deutsche Mark parity)
+
+EXCHANGE_RATES = {
+    "EUR": 1.0,
+    "HRK": 1.0 / EUR_TO_HRK,  # ~0.1327
+    "RSD": 1.0 / EUR_TO_RSD,  # ~0.0085
+    "BAM": 1.0 / EUR_TO_BAM,  # ~0.5113
+}
+
+
+def convert_currency(amount: float, from_currency: str, to_currency: str = "EUR") -> float:
+    """Convert amount between regional currencies.
+    
+    Uses fixed exchange rates where applicable (EUR/HRK, EUR/BAM)
+    and approximate market rates for others (EUR/RSD).
+    
+    Args:
+        amount: Amount to convert
+        from_currency: Source currency code
+        to_currency: Target currency code (default: EUR)
+        
+    Returns:
+        Converted amount
+    """
+    if from_currency == to_currency:
+        return amount
+    
+    # Convert to EUR first
+    eur_rate = EXCHANGE_RATES.get(from_currency.upper(), 1.0)
+    amount_eur = amount * eur_rate
+    
+    # Convert from EUR to target
+    if to_currency.upper() != "EUR":
+        target_rate = EXCHANGE_RATES.get(to_currency.upper(), 1.0)
+        return amount_eur / target_rate
+    
+    return amount_eur
+
+
+def get_vat_rate(country_code: str) -> float:
+    """Get VAT rate for a country code."""
+    return VAT_RATES.get(country_code.upper(), 0.25)  # Default to Croatian rate
+
 
 @dataclass
 class PricingRules:
@@ -23,6 +88,7 @@ class PricingRules:
     include_shipping: bool = True
     include_vat: bool = True
     target_currency: str = "EUR"
+    country_code: str = "HR"  # For VAT rate detection
 
 
 @dataclass
@@ -145,26 +211,42 @@ def normalize_price(
     pf: PriceField,
     vendor: str = "",
     domain_vat_included: bool | None = True,
+    target_currency: str = "EUR",
 ) -> NormalizedQuote:
-    """Normalize a PriceField to a standard NormalizedQuote."""
+    """Normalize a PriceField to a standard NormalizedQuote.
+    
+    Args:
+        pf: PriceField with extracted price data
+        vendor: Vendor name
+        domain_vat_included: Whether prices include VAT for this domain
+        target_currency: Currency to convert to (default: EUR)
+        
+    Returns:
+        NormalizedQuote with standardized price and currency
+    """
     amount = pf.amount or 0.0
     currency = pf.currency or "EUR"
     vat_included = pf.vat_included if pf.vat_included is not None else domain_vat_included
-
+    
+    # Convert currency if needed
+    if currency != target_currency:
+        amount = convert_currency(amount, currency, target_currency)
+        currency = target_currency
+    
     # Detect unit and pack size from product name
     unit = normalize_unit(pf.unit)
     pack_size, pack_unit = detect_pack_size(pf.product_name or pf.raw_text)
-
+    
     # Compute VAT
     if vat_included:
         vat_amount = round(amount - amount / 1.25, 2)  # 25% PDV
     else:
         vat_amount = 0.0
-
+    
     # Confidence based on extraction method
     confidence_map = {"jsonld": 0.9, "meta": 0.8, "css": 0.6, "llm": 0.5}
     confidence = confidence_map.get(pf.source_method, 0.4)
-
+    
     return NormalizedQuote(
         unit_price=amount,
         currency=currency,

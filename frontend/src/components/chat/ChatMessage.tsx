@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { ChatMessage as ChatMessageType } from "@/lib/types";
 
 // ── Variants ────────────────────────────────────────────────────────
@@ -63,7 +64,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
     >
       <div
         className={`
-          max-w-[75%] px-2 py-1.5 rounded-lg text-[11px]
+          max-w-[95%] px-2 py-1.5 rounded-lg text-[11px]
           ${
             isUser
               ? "bg-accent-cyan/15 border border-accent-cyan/25 text-text-primary rounded-br-sm"
@@ -82,7 +83,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           <p className="whitespace-pre-wrap break-words leading-snug">{content}</p>
         ) : (
           <div className="prose-chat leading-snug break-words">
-            <ReactMarkdown>{content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           </div>
         )}
         <span

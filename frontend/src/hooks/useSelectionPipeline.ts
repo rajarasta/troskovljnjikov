@@ -4,6 +4,7 @@ import { useChatPanelStore } from "@/stores/chatPanelStore";
 import { useMatchStore } from "@/stores/matchStore";
 import { useAutopilotStore } from "@/stores/autopilotStore";
 import { analyzeSelection, fetchCachedMatches } from "@/lib/api";
+import { requestQueue } from "@/lib/requestQueue";
 import type { ChatMessage } from "@/lib/types";
 
 /**
@@ -35,12 +36,53 @@ export function useSelectionPipeline() {
   const selections = useSelectionStore((s) => s.selections);
   const processedIds = useRef(new Set<string>());
   const abortControllers = useRef(new Map<string, AbortController>());
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSelections = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    // Process new selections
+    // Collect new selections into pending set
+    const newSelectionIds = new Set<string>();
     for (const selection of selections) {
-      if (processedIds.current.has(selection.id)) continue;
-      processedIds.current.add(selection.id);
+      if (!processedIds.current.has(selection.id)) {
+        newSelectionIds.add(selection.id);
+        pendingSelections.current.add(selection.id);
+      }
+    }
+
+    // If no new selections, process removals immediately
+    if (newSelectionIds.size === 0) {
+      processRemovals();
+      return;
+    }
+
+    // Debounce: wait 300ms for more selections before processing
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+    }
+
+    debounceTimer.current = setTimeout(() => {
+      processPendingSelections();
+      processRemovals();
+      debounceTimer.current = null;
+    }, 300);
+
+    return () => {
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
+      }
+    };
+  }, [selections]);
+
+  function processPendingSelections() {
+    const selectionsMap = new Map(
+      useSelectionStore.getState().selections.map((s) => [s.id, s])
+    );
+
+    // Process all pending selections at once
+    for (const selectionId of pendingSelections.current) {
+      const selection = selectionsMap.get(selectionId);
+      if (!selection || processedIds.current.has(selectionId)) continue;
+      processedIds.current.add(selectionId);
 
       const descriptions = selection.items.map((i) => i.description);
       console.log("📊 useSelectionPipeline processing:", { selectionId: selection.id, itemCount: selection.items.length, items: selection.items.map(i => ({ id: i.id, description: i.description })) });
@@ -84,7 +126,7 @@ export function useSelectionPipeline() {
         );
       }
 
-      // 2. Create chat panel + request LLM analysis
+      // 2. Create chat panel + request LLM analysis (queued to prevent API overload)
       const chatStore = useChatPanelStore.getState();
       const panelId = chatStore.createPanel(selection.id, label);
       chatStore.setAnalyzing(panelId, true);
@@ -93,8 +135,16 @@ export function useSelectionPipeline() {
       const controller = new AbortController();
       abortControllers.current.set(selection.id, controller);
 
-      analyzeSelection(selection.id, descriptions, combinedDesc, controller.signal)
-        .then((response) => {
+      // Queue the analysis request
+      requestQueue.enqueue(`chat-${selection.id}`, async () => {
+        try {
+          const response = await analyzeSelection(
+            selection.id,
+            descriptions,
+            combinedDesc,
+            controller.signal
+          );
+
           // Re-read store at resolution time for latest state
           const store = useChatPanelStore.getState();
           if (!store.panelExists(panelId)) return;
@@ -113,9 +163,8 @@ export function useSelectionPipeline() {
           }
           store.addMessage(panelId, response);
           store.setAnalyzing(panelId, false);
-        })
-        .catch((err) => {
-          if (err.name === 'AbortError') return;
+        } catch (err) {
+          if ((err as Error).name === 'AbortError') return;
 
           const store = useChatPanelStore.getState();
           if (!store.panelExists(panelId)) return;
@@ -128,14 +177,18 @@ export function useSelectionPipeline() {
             created_at: new Date().toISOString(),
           });
           store.setAnalyzing(panelId, false);
-        })
-        .finally(() => {
+        } finally {
           abortControllers.current.delete(selection.id);
-        });
+        }
+      });
     }
 
+    pendingSelections.current.clear();
+  }
+
+  function processRemovals() {
     // Clean up removed selections
-    const currentIds = new Set(selections.map((s) => s.id));
+    const currentIds = new Set(useSelectionStore.getState().selections.map((s) => s.id));
     for (const id of processedIds.current) {
       if (!currentIds.has(id)) {
         // Abort in-flight API request
@@ -155,5 +208,5 @@ export function useSelectionPipeline() {
         processedIds.current.delete(id);
       }
     }
-  }, [selections]);
+  }
 }

@@ -5,7 +5,9 @@ Provides a simple caching layer (15-min TTL) keyed by URL.
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -34,35 +36,89 @@ class FetchResult:
 
 
 # ---------------------------------------------------------------------------
-# In-memory cache (URL -> FetchResult, 15 min TTL)
+# In-memory LRU cache (URL -> FetchResult, 15 min TTL)
+# Implements thread-safe LRU eviction to prevent unbounded memory growth
 # ---------------------------------------------------------------------------
 
-_cache: dict[str, tuple[float, FetchResult]] = {}
-_CACHE_TTL = 900  # 15 minutes
+@dataclass
+class _CacheEntry:
+    """Cache entry with timestamp for TTL validation."""
+    timestamp: float
+    result: FetchResult
+
+
+class _LRUCache:
+    """Thread-safe LRU cache with TTL support."""
+
+    def __init__(self, max_size: int = 100, ttl: float = 900):
+        self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._max_size = max_size
+        self._ttl = ttl
+        self._lock = threading.RLock()
+
+    def get(self, url: str) -> FetchResult | None:
+        """Get cached result if valid (not expired)."""
+        with self._lock:
+            if url not in self._cache:
+                return None
+
+            entry = self._cache[url]
+            # Check if expired
+            if time.time() - entry.timestamp > self._ttl:
+                del self._cache[url]
+                return None
+
+            # Move to end (mark as recently used)
+            self._cache.move_to_end(url)
+
+            return FetchResult(
+                url=entry.result.url,
+                final_url=entry.result.final_url,
+                html=entry.result.html,
+                text=entry.result.text,
+                status_code=entry.result.status_code,
+                fetched_at=entry.result.fetched_at,
+                from_cache=True,
+                fetch_mode=entry.result.fetch_mode,
+            )
+
+    def put(self, url: str, result: FetchResult) -> None:
+        """Put result in cache, evicting oldest if over limit."""
+        with self._lock:
+            # Remove if already exists (will re-add at end)
+            if url in self._cache:
+                del self._cache[url]
+
+            # Add new entry
+            self._cache[url] = _CacheEntry(timestamp=time.time(), result=result)
+
+            # Evict oldest item if over size limit
+            if len(self._cache) > self._max_size:
+                oldest_url, _ = self._cache.popitem(last=False)
+                logger.debug(f"Evicted cache entry for {oldest_url} (size limit reached)")
+
+    def clear(self) -> None:
+        """Clear all cache entries."""
+        with self._lock:
+            self._cache.clear()
+
+    def size(self) -> int:
+        """Get current cache size."""
+        with self._lock:
+            return len(self._cache)
+
+
+_cache = _LRUCache(max_size=100, ttl=900)  # 100 URLs, 15 min TTL
 
 
 def _cache_get(url: str) -> FetchResult | None:
-    entry = _cache.get(url)
-    if entry is None:
-        return None
-    ts, result = entry
-    if time.time() - ts > _CACHE_TTL:
-        del _cache[url]
-        return None
-    return FetchResult(
-        url=result.url,
-        final_url=result.final_url,
-        html=result.html,
-        text=result.text,
-        status_code=result.status_code,
-        fetched_at=result.fetched_at,
-        from_cache=True,
-        fetch_mode=result.fetch_mode,
-    )
+    """Get cached result if available and not expired."""
+    return _cache.get(url)
 
 
 def _cache_put(url: str, result: FetchResult) -> None:
-    _cache[url] = (time.time(), result)
+    """Put result in cache."""
+    _cache.put(url, result)
 
 
 # ---------------------------------------------------------------------------

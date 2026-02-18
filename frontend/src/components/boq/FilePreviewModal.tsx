@@ -49,7 +49,7 @@ export default function FilePreviewModal() {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ type: "spring", damping: 25, stiffness: 300 }}
-            className="fixed inset-y-4 inset-x-1 z-50 flex flex-col rounded-lg border border-border-default bg-bg-primary shadow-2xl overflow-hidden"
+            className="fixed inset-y-4 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 flex flex-col rounded-lg border border-border-default bg-bg-primary shadow-2xl overflow-hidden max-w-4xl w-[calc(100%-2rem)]"
           >
             {/* Header */}
             <div className="shrink-0 flex items-center justify-between px-1 py-3 border-b border-border-default bg-bg-secondary/50">
@@ -125,7 +125,7 @@ export default function FilePreviewModal() {
                         </td>
                         <td
                           className={`border border-border-default px-1 py-1 text-[9px] text-text-primary ${
-                            wrapText ? "whitespace-pre-wrap break-words" : "max-w-xs truncate"
+                            wrapText ? "whitespace-pre-wrap break-words max-w-sm" : "max-w-xs truncate"
                           }`}
                         >
                           {item.description}

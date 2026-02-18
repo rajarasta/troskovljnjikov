@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { MatchResult, MatchStats, MatchGroup } from "@/lib/types";
 import * as api from "@/lib/api";
+import { requestQueue } from "@/lib/requestQueue";
 
 /** Per-selection match results */
 export interface SelectionMatchState {
@@ -66,43 +67,46 @@ export const useMatchStore = create<MatchState>((set, get) => ({
       },
     }));
 
-    try {
-      const response = await api.matchItems(
-        description, quantity, undefined, fileId, startRow, endRow,
-      );
-      // Only update if selection still exists (wasn't removed while searching)
-      const current = get().resultsBySelection[selectionId];
-      if (current) {
-        set((s) => ({
-          resultsBySelection: {
-            ...s.resultsBySelection,
-            [selectionId]: {
-              matches: response.matches,
-              stats: response.stats,
-              isSearching: false,
-              error: null,
-              groups: response.groups ?? null,
-              isComposite: response.is_composite ?? false,
-              parentDescription: response.parent_description ?? null,
+    // Queue the API request to prevent overwhelming the server
+    await requestQueue.enqueue(`match-${selectionId}`, async () => {
+      try {
+        const response = await api.matchItems(
+          description, quantity, undefined, fileId, startRow, endRow,
+        );
+        // Only update if selection still exists (wasn't removed while searching)
+        const current = get().resultsBySelection[selectionId];
+        if (current) {
+          set((s) => ({
+            resultsBySelection: {
+              ...s.resultsBySelection,
+              [selectionId]: {
+                matches: response.matches,
+                stats: response.stats,
+                isSearching: false,
+                error: null,
+                groups: response.groups ?? null,
+                isComposite: response.is_composite ?? false,
+                parentDescription: response.parent_description ?? null,
+              },
             },
-          },
-        }));
-      }
-    } catch (err) {
-      const current = get().resultsBySelection[selectionId];
-      if (current) {
-        set((s) => ({
-          resultsBySelection: {
-            ...s.resultsBySelection,
-            [selectionId]: {
-              ...(s.resultsBySelection[selectionId] ?? emptyResult),
-              isSearching: false,
-              error: err instanceof Error ? err.message : "Match lookup failed",
+          }));
+        }
+      } catch (err) {
+        const current = get().resultsBySelection[selectionId];
+        if (current) {
+          set((s) => ({
+            resultsBySelection: {
+              ...s.resultsBySelection,
+              [selectionId]: {
+                ...(s.resultsBySelection[selectionId] ?? emptyResult),
+                isSearching: false,
+                error: err instanceof Error ? err.message : "Match lookup failed",
+              },
             },
-          },
-        }));
+          }));
+        }
       }
-    }
+    });
   },
 
   setCachedResults: (selectionId, matches, stats) => {
