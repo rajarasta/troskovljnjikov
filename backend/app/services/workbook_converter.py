@@ -257,6 +257,42 @@ def xlsx_to_workbook_data(file_path: str) -> dict:
 
                 cell_data.setdefault(r, {})[c] = entry
 
+        # --- Auto-wrap description column ---
+        # Detect description column: scan first few rows for "Stavka" header,
+        # fall back to column B (index 1).
+        desc_col = 1  # default: column B
+        for scan_row in range(0, min(5, max_row)):
+            row_cells = cell_data.get(scan_row, {})
+            for ci, ce in row_cells.items():
+                val = ce.get("v")
+                if isinstance(val, str) and "stavka" in val.lower():
+                    desc_col = ci
+                    break
+
+        # Inject tb=3 (wrap text) on all cells in the description column.
+        for r_idx, row_cells in cell_data.items():
+            entry = row_cells.get(desc_col)
+            if entry is None:
+                continue
+            val = entry.get("v")
+            if not isinstance(val, str) or len(val) < 10:
+                continue
+            existing_sid = entry.get("s")
+            if existing_sid and existing_sid in styles:
+                existing_style = styles[existing_sid]
+                if existing_style.get("tb") == 3:
+                    continue  # already wrapped
+                new_style = {**existing_style, "tb": 3}
+            else:
+                new_style = {"tb": 3}
+            new_key = _style_cache_key(new_style)
+            if new_key not in style_cache:
+                sid = f"s{style_counter}"
+                style_counter += 1
+                style_cache[new_key] = sid
+                styles[sid] = new_style
+            entry["s"] = style_cache[new_key]
+
         # --- Merged cells ---
         merge_data: list[dict[str, int]] = []
         for merged_range in ws.merged_cells.ranges:

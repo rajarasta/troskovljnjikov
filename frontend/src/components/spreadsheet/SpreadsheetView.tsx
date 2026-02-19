@@ -1,20 +1,15 @@
 "use client";
 
-import { useMemo, useCallback, forwardRef } from "react";
+import { useMemo, useCallback, forwardRef, useState } from "react";
 import { FileSpreadsheet } from "lucide-react";
 import { useBoQStore } from "@/stores/boqStore";
 import { useSelectionStore } from "@/stores/selectionStore";
+import { useClipboardStore } from "@/stores/clipboardStore";
+import { useAutopilotStore } from "@/stores/autopilotStore";
+import { BOQ_COLUMNS, formatNumber } from "@/lib/boqTableConfig";
+import { EditableDescriptionCell } from "./EditableDescriptionCell";
 import type { SelectionColor } from "@/stores/selectionStore";
-import type { BoQItem } from "@/lib/types";
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-function formatNumber(value: number): string {
-  return value.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
+import type { BoQItem, ConfidenceTier } from "@/lib/types";
 
 /** Set of item_numbers that have at least one child referencing them */
 function buildParentSet(items: BoQItem[]): Set<string> {
@@ -56,18 +51,9 @@ const ACTIVE_TEXT_CLASSES: Record<SelectionColor, string> = {
   sky: "text-accent-sky",
 };
 
-// ── Column config ────────────────────────────────────────────────────
+// Column config imported from @/lib/boqTableConfig (BOQ_COLUMNS)
 
-const COLUMNS = [
-  { key: "item_number", label: "#", width: "60px", align: "left" as const },
-  { key: "description", label: "Description", width: undefined, align: "left" as const },
-  { key: "quantity", label: "Qty", width: "80px", align: "right" as const },
-  { key: "unit", label: "Unit", width: "60px", align: "left" as const },
-  { key: "unit_price", label: "Unit Price", width: "100px", align: "right" as const },
-  { key: "total", label: "Total", width: "100px", align: "right" as const },
-] as const;
-
-// ── Editable cell ────────────────────────────────────────────────────
+// ── Editable cell with drop zone ─────────────────────────────────────
 
 function EditableCell({
   value,
@@ -79,6 +65,7 @@ function EditableCell({
   field: "quantity" | "unit_price";
 }) {
   const updateWorkingItem = useBoQStore((s) => s.updateWorkingItem);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -88,28 +75,80 @@ function EditableCell({
     [itemId, field, updateWorkingItem],
   );
 
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setIsDragOver(true);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragOver(false);
+      try {
+        const raw = e.dataTransfer.getData("application/x-boq-cell");
+        if (!raw) return;
+        const data = JSON.parse(raw) as { value: number; field: string };
+        if (data.field === field) {
+          const val = typeof data.value === "number" ? data.value : parseFloat(String(data.value)) || 0;
+          updateWorkingItem(itemId, { [field]: val });
+        }
+      } catch {
+        // ignore malformed data
+      }
+    },
+    [itemId, field, updateWorkingItem],
+  );
+
   return (
-    <input
-      type="number"
-      step="any"
-      value={value}
-      onChange={handleChange}
-      className="
-        w-full bg-transparent font-mono text-xs text-right text-text-primary
-        outline-none border border-transparent rounded px-1 py-0.5
-        hover:border-border-default focus:border-accent-purple focus:ring-1 focus:ring-accent-purple/30
-        transition-all duration-150
-        [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none
-      "
-    />
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={() => setIsDragOver(false)}
+      onDrop={handleDrop}
+      className={`
+        transition-all duration-100
+        ${isDragOver ? "ring-2 ring-accent-purple/40 ring-inset rounded bg-accent-purple/5" : ""}
+      `}
+    >
+      <input
+        type="number"
+        step="any"
+        value={value}
+        onChange={handleChange}
+        className="
+          w-full bg-transparent font-mono text-xs text-right text-text-primary
+          outline-none border border-transparent rounded px-1 py-0.5
+          hover:border-border-default focus:border-accent-purple focus:ring-1 focus:ring-accent-purple/30
+          transition-all duration-150
+          [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none
+        "
+      />
+    </div>
   );
 }
+
+// ── Confidence badge ──────────────────────────────────────────────────
+
+const CONFIDENCE_DOT_CLASSES: Record<ConfidenceTier, string> = {
+  high: "bg-status-success",
+  medium: "bg-status-warning",
+  low: "bg-status-danger",
+};
+
+const CONFIDENCE_LABELS: Record<ConfidenceTier, string> = {
+  high: "High confidence match",
+  medium: "Needs review",
+  low: "No good match",
+};
 
 // ── Component ────────────────────────────────────────────────────────
 
 const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_props, ref) {
   const items = useBoQStore((s) => s.items);
   const workingItems = useBoQStore((s) => s.workingItems);
+  const selectedFileId = useBoQStore((s) => s.selectedFileId);
+  const confidences = useAutopilotStore((s) => selectedFileId ? s.confidences[selectedFileId] : undefined);
 
   const selections = useSelectionStore((s) => s.selections);
   const activeSelectionId = useSelectionStore((s) => s.activeSelectionId);
@@ -117,6 +156,10 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
   const setActive = useSelectionStore((s) => s.setActive);
   const setDragAnchor = useSelectionStore((s) => s.setDragAnchor);
   const dragAnchorIndex = useSelectionStore((s) => s.dragAnchorIndex);
+
+  const pickedValue = useClipboardStore((s) => s.pickedValue);
+  const clearPicked = useClipboardStore((s) => s.clearPicked);
+  const updateWorkingItem = useBoQStore((s) => s.updateWorkingItem);
 
   const parentSet = useMemo(() => buildParentSet(items), [items]);
 
@@ -197,7 +240,7 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
       <table className="w-full text-xs border-collapse">
         {/* Column sizing via colgroup */}
         <colgroup>
-          {COLUMNS.map((col) => (
+          {BOQ_COLUMNS.map((col) => (
             <col
               key={col.key}
               style={col.width ? { width: col.width, minWidth: col.width } : undefined}
@@ -209,7 +252,7 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
         {/* ── Sticky header ──────────────────────────────────────── */}
         <thead className="sticky top-0 z-10 bg-bg-secondary">
           <tr className="border-b border-border-default">
-            {COLUMNS.map((col) => (
+            {BOQ_COLUMNS.map((col) => (
               <th
                 key={col.key}
                 className={`
@@ -263,23 +306,34 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
                   ${!highlight ? "hover:bg-bg-hover" : ""}
                 `}
               >
-                {/* # */}
+                {/* # + confidence dot */}
                 <td className="px-3 py-1.5 font-mono text-text-muted whitespace-nowrap align-top">
-                  {item.item_number}
+                  <span className="inline-flex items-center gap-1.5">
+                    {confidences?.[item.id] && (
+                      <span
+                        className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${CONFIDENCE_DOT_CLASSES[confidences[item.id]]}`}
+                        title={CONFIDENCE_LABELS[confidences[item.id]]}
+                      />
+                    )}
+                    {item.item_number}
+                  </span>
                 </td>
 
-                {/* Description — full text, wrapping */}
+                {/* Description — editable with inline autocomplete */}
                 <td
-                  className={`px-3 py-1.5 whitespace-pre-wrap break-words ${
-                    textColor || "text-text-primary"
-                  }`}
+                  className="px-3 py-1.5 align-top"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  {item.description}
-                </td>
-
-                {/* Qty (editable) */}
-                <td className="px-1 py-0.5 align-top" onClick={(e) => e.stopPropagation()}>
-                  <EditableCell value={item.quantity} itemId={item.id} field="quantity" />
+                  <EditableDescriptionCell
+                    value={item.description}
+                    itemId={item.id}
+                    textColor={textColor || undefined}
+                    context={displayItems
+                      .slice(Math.max(0, index - 2), index + 3)
+                      .filter((i) => i.id !== item.id)
+                      .map((i) => ({ item_number: i.item_number, description: i.description }))}
+                    onCommit={(id, newDesc) => updateWorkingItem(id, { description: newDesc })}
+                  />
                 </td>
 
                 {/* Unit */}
@@ -287,8 +341,45 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
                   {item.unit}
                 </td>
 
-                {/* Unit Price (editable) */}
-                <td className="px-1 py-0.5 align-top" onClick={(e) => e.stopPropagation()}>
+                {/* Qty (editable / paste target) */}
+                <td
+                  className={`px-1 py-0.5 align-top ${
+                    pickedValue?.field === "quantity" ? "cursor-copy" : ""
+                  }`}
+                  onClick={(e) => {
+                    if (pickedValue?.field === "quantity") {
+                      e.stopPropagation();
+                      const val = typeof pickedValue.value === "number"
+                        ? pickedValue.value
+                        : parseFloat(String(pickedValue.value)) || 0;
+                      updateWorkingItem(item.id, { quantity: val });
+                      clearPicked();
+                    } else {
+                      e.stopPropagation();
+                    }
+                  }}
+                >
+                  <EditableCell value={item.quantity} itemId={item.id} field="quantity" />
+                </td>
+
+                {/* Unit Price (editable / paste target) */}
+                <td
+                  className={`px-1 py-0.5 align-top ${
+                    pickedValue?.field === "unit_price" ? "cursor-copy" : ""
+                  }`}
+                  onClick={(e) => {
+                    if (pickedValue?.field === "unit_price") {
+                      e.stopPropagation();
+                      const val = typeof pickedValue.value === "number"
+                        ? pickedValue.value
+                        : parseFloat(String(pickedValue.value)) || 0;
+                      updateWorkingItem(item.id, { unit_price: val });
+                      clearPicked();
+                    } else {
+                      e.stopPropagation();
+                    }
+                  }}
+                >
                   <EditableCell value={item.unit_price} itemId={item.id} field="unit_price" />
                   {priceChanged && originalItem && (
                     <div className="text-[9px] text-accent-purple font-mono text-right px-1 -mt-0.5">

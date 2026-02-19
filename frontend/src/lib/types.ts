@@ -8,6 +8,7 @@ export interface BoQFile {
   item_count: number;
   sheet_count: number;
   raw_preview: Record<string, string[][]> | null;
+  header_rows: Record<string, number> | null;
   indexed_at: string;
 }
 
@@ -117,6 +118,24 @@ export interface SelectionMatchRequest {
 export interface SelectionAnalysisRequest {
   item_descriptions: string[];
   match_context: MatchResult[];
+}
+
+// ── Autopilot Models ──────────────────────────────────────────────
+
+export type ConfidenceTier = "high" | "medium" | "low";
+
+export type AutopilotStatus = "idle" | "summarizing" | "matching" | "pricing" | "done" | "error";
+
+export interface PriceSuggestion {
+  suggested_price: number;
+  confidence: number;
+  based_on: number;
+}
+
+export interface AutopilotMatchResult {
+  id: string;
+  similarity: number;
+  metadata: Record<string, unknown>;
 }
 
 // ── Preset Models ──────────────────────────────────────────────────

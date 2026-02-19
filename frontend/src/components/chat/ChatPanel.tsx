@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { X, Loader2, MessageSquare } from "lucide-react";
 import { useChatPanelStore } from "@/stores/chatPanelStore";
 import { useSelectionStore } from "@/stores/selectionStore";
-import { sendChatMessage } from "@/lib/api";
+import { sendChatMessageStreaming, sendChatMessageWithImage } from "@/lib/api";
 import type { ChatMessage as ChatMessageType } from "@/lib/types";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
@@ -16,28 +16,32 @@ interface ChatPanelProps {
 export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
   const panel = useChatPanelStore((s) => s.panels.find((p) => p.id === panelId));
   const activePanelId = useChatPanelStore((s) => s.activePanelId);
-  const { setActive, addMessage, setSending, setError } = useChatPanelStore();
+  const setActive = useChatPanelStore((s) => s.setActive);
   const setSelectionActive = useSelectionStore((s) => s.setActive);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const prevActiveRef = useRef(false);
 
   const isActive = activePanelId === panelId;
 
+  const scrollToBottom = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+
   // Auto-scroll on new messages
   useEffect(() => {
     if (isActive && panel?.messages.length) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      scrollToBottom();
     }
-  }, [panel?.messages.length, isActive]);
+  }, [panel?.messages.length, isActive, scrollToBottom]);
 
   // Auto-scroll when panel becomes active
   useEffect(() => {
     if (isActive && !prevActiveRef.current) {
-      // Panel just became active
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      scrollToBottom();
     }
     prevActiveRef.current = isActive;
-  }, [isActive]);
+  }, [isActive, scrollToBottom]);
 
   const handleClick = useCallback(() => {
     if (!panel) return;
@@ -53,28 +57,60 @@ export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
     removeSelection(panel.selectionId);
   }, [panel]);
 
-  const handleSend = useCallback(async (content: string) => {
+  const handleSend = useCallback(async (content: string, image?: File) => {
     if (!panel) return;
+    const store = useChatPanelStore.getState();
     const optimisticId = `opt-${Date.now()}`;
+
+    // Create local image preview URL for display
+    const imageUrl = image ? URL.createObjectURL(image) : undefined;
+
     const userMsg: ChatMessageType = {
       id: optimisticId,
       item_id: panel.selectionId,
       role: "user",
       content,
       created_at: new Date().toISOString(),
+      image_url: imageUrl,
     };
-    addMessage(panelId, userMsg);
-    setSending(panelId, true);
-    setError(panelId, null);
+    store.addMessage(panelId, userMsg);
+    store.setSending(panelId, true);
+    store.setError(panelId, null);
     try {
-      const response = await sendChatMessage(panel.selectionId, content);
-      addMessage(panelId, response);
+      if (image) {
+        // Image messages use the non-streaming path
+        const response = await sendChatMessageWithImage(panel.selectionId, content, image);
+        useChatPanelStore.getState().addMessage(panelId, response);
+        useChatPanelStore.getState().setSending(panelId, false);
+      } else {
+        // Create a placeholder streaming message that WS tokens will fill
+        const streamingMsg: ChatMessageType = {
+          id: `streaming-${Date.now()}`,
+          item_id: panel.selectionId,
+          role: "assistant",
+          content: "",
+          created_at: new Date().toISOString(),
+        };
+        useChatPanelStore.getState().addMessage(panelId, streamingMsg);
+
+        // Fire the streaming request — tokens arrive via WS (chat:token events)
+        // The final persisted message replaces the streaming placeholder
+        const finalMsg = await sendChatMessageStreaming(panel.selectionId, content);
+        // Replace streaming placeholder with final persisted message
+        useChatPanelStore.setState((s) => ({
+          panels: s.panels.map((p) =>
+            p.id === panelId
+              ? { ...p, messages: p.messages.map((m) => m.id.startsWith("streaming-") ? finalMsg : m) }
+              : p,
+          ),
+        }));
+        useChatPanelStore.getState().setSending(panelId, false);
+      }
     } catch (err) {
-      setError(panelId, err instanceof Error ? err.message : "Failed to send");
-    } finally {
-      setSending(panelId, false);
+      useChatPanelStore.getState().setError(panelId, err instanceof Error ? err.message : "Failed to send");
+      useChatPanelStore.getState().setSending(panelId, false);
     }
-  }, [panel, panelId, addMessage, setSending, setError]);
+  }, [panel, panelId]);
 
   if (!panel) return null;
 
@@ -110,7 +146,7 @@ export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
       </div>
 
       {/* Messages */}
-      <div className={`overflow-y-auto ${isActive ? "max-h-64" : "max-h-20"} transition-all duration-200`}>
+      <div ref={messagesContainerRef} className={`overflow-y-auto ${isActive ? "max-h-64" : "max-h-20"} transition-all duration-200`}>
         {panel.messages.length === 0 && !panel.isAnalyzing ? (
           <div className="text-[10px] text-text-muted px-3 py-2">
             Waiting for analysis...
@@ -120,7 +156,6 @@ export default function ChatPanelComponent({ panelId }: ChatPanelProps) {
             {panel.messages.map((msg) => (
               <ChatMessage key={msg.id} message={msg} />
             ))}
-            <div ref={messagesEndRef} />
           </div>
         )}
         {panel.error && (

@@ -40,6 +40,7 @@ class BoQFile(Base):
     column_mapping = Column(JSON, nullable=True)
     missing_data = Column(JSON, nullable=True)
     raw_preview = Column(JSON, nullable=True)  # first N raw rows per sheet
+    header_rows = Column(JSON, nullable=True)  # {sheet_name: header_row_index}
     date_source = Column(String, nullable=True)  # "filename" | "file_mtime" | "manual"
     indexed_at = Column(DateTime, default=datetime.utcnow)
 

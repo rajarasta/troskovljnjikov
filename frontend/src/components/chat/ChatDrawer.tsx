@@ -47,7 +47,6 @@ export default function ChatDrawer({
   const [isLoading, setIsLoading] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // ── Fetch chat history when drawer opens ──────────────────────────
@@ -89,7 +88,8 @@ export default function ChatDrawer({
   // ── Auto-scroll on new messages ───────────────────────────────────
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   // ── Send message handler ──────────────────────────────────────────
@@ -194,7 +194,6 @@ export default function ChatDrawer({
                   {messages.map((msg) => (
                     <ChatMessage key={msg.id} message={msg} />
                   ))}
-                  <div ref={messagesEndRef} />
                 </div>
               )}
 

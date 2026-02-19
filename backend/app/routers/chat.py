@@ -1,10 +1,11 @@
 """Chat endpoint - per-item chat with LLM context powered by PydanticAI."""
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -14,6 +15,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.boq import BoQItem, ChatMessage
 from app.schemas.boq import ChatMessageSchema, ChatRequest
+from app.ws.events import CHAT_TOKEN, CHAT_COMPLETE, emit
 
 logger = logging.getLogger(__name__)
 
@@ -90,57 +92,204 @@ async def send_chat_message(
     db: Session = Depends(get_db),
 ) -> ChatMessage:
     """Send a user message, run it through the LLM with item context, and return the assistant reply."""
-    # For selection-based chats (e.g. "sel-1-1708012345"), skip DB item
-    # lookup — context is embedded in the message content by the frontend.
-    if item_id.startswith("sel-"):
-        item = None
-    else:
-        item = db.query(BoQItem).filter(BoQItem.id == item_id).first()
-
-    # Build conversation history for the LLM
-    history = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.item_id == item_id)
-        .order_by(ChatMessage.created_at)
-        .all()
-    )
-
-    # Compose the prompt with item context and conversation history
-    prompt_parts: list[str] = []
-
-    if item:
-        prompt_parts.append("=== BOQ Item Context ===")
-        prompt_parts.append(_build_item_context(item))
-        prompt_parts.append("")
-
-    if history:
-        prompt_parts.append("=== Conversation History ===")
-        for msg in history[-10:]:  # Last 10 messages to stay within context limits
-            prompt_parts.append(f"{msg.role}: {msg.content}")
-        prompt_parts.append("")
-
-    prompt_parts.append(f"user: {req.message}")
-
-    full_prompt = "\n".join(prompt_parts)
-
-    # Persist the user message
-    user_msg = ChatMessage(item_id=item_id, role="user", content=req.message)
-    db.add(user_msg)
-    db.commit()
-    db.refresh(user_msg)
-
-    # Call the LLM
     try:
-        result = await chat_agent.run(full_prompt)
-        assistant_content = result.output
+        # For selection-based chats (e.g. "sel-1-1708012345"), skip DB item
+        # lookup — context is embedded in the message content by the frontend.
+        if item_id.startswith("sel-"):
+            item = None
+        else:
+            item = db.query(BoQItem).filter(BoQItem.id == item_id).first()
+
+        # Build conversation history for the LLM
+        history = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.item_id == item_id)
+            .order_by(ChatMessage.created_at)
+            .all()
+        )
+
+        # Compose the prompt with item context and conversation history
+        prompt_parts: list[str] = []
+
+        if item:
+            prompt_parts.append("=== BOQ Item Context ===")
+            prompt_parts.append(_build_item_context(item))
+            prompt_parts.append("")
+
+        if history:
+            prompt_parts.append("=== Conversation History ===")
+            for msg in history[-10:]:  # Last 10 messages to stay within context limits
+                prompt_parts.append(f"{msg.role}: {msg.content}")
+            prompt_parts.append("")
+
+        prompt_parts.append(f"user: {req.message}")
+
+        full_prompt = "\n".join(prompt_parts)
+
+        # Persist the user message
+        user_msg = ChatMessage(item_id=item_id, role="user", content=req.message)
+        db.add(user_msg)
+        db.commit()
+        db.refresh(user_msg)
+
+        # Call the LLM
+        try:
+            result = await chat_agent.run(full_prompt)
+            assistant_content = result.output
+        except Exception as exc:
+            logger.exception("LLM call failed for chat item %s", item_id)
+            assistant_content = f"Sorry, I encountered an error: {exc}"
+
+        # Persist the assistant reply
+        assistant_msg = ChatMessage(item_id=item_id, role="assistant", content=assistant_content)
+        db.add(assistant_msg)
+        db.commit()
+        db.refresh(assistant_msg)
+
+        return assistant_msg
     except Exception as exc:
-        logger.exception("LLM call failed for chat item %s", item_id)
-        assistant_content = f"Sorry, I encountered an error: {exc}"
+        logger.exception("Chat endpoint failed for %s", item_id)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
 
-    # Persist the assistant reply
-    assistant_msg = ChatMessage(item_id=item_id, role="assistant", content=assistant_content)
-    db.add(assistant_msg)
-    db.commit()
-    db.refresh(assistant_msg)
 
-    return assistant_msg
+@router.post("/chat/{item_id}/image", response_model=ChatMessageSchema)
+async def send_chat_message_with_image(
+    item_id: str,
+    message: str = Form(...),
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> ChatMessage:
+    """Send a user message with an attached image through the LLM."""
+    try:
+        # Read and encode image
+        image_bytes = await image.read()
+        b64_string = base64.b64encode(image_bytes).decode("ascii")
+        content_type = image.content_type or "image/jpeg"
+
+        # Build item context (same as text-only endpoint)
+        if item_id.startswith("sel-"):
+            item = None
+        else:
+            item = db.query(BoQItem).filter(BoQItem.id == item_id).first()
+
+        history = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.item_id == item_id)
+            .order_by(ChatMessage.created_at)
+            .all()
+        )
+
+        prompt_parts: list[str] = []
+
+        if item:
+            prompt_parts.append("=== BOQ Item Context ===")
+            prompt_parts.append(_build_item_context(item))
+            prompt_parts.append("")
+
+        if history:
+            prompt_parts.append("=== Conversation History ===")
+            for msg in history[-10:]:
+                prompt_parts.append(f"{msg.role}: {msg.content}")
+            prompt_parts.append("")
+
+        prompt_parts.append(f"user: {message}")
+        prompt_parts.append(f"![attached image](data:{content_type};base64,{b64_string})")
+
+        full_prompt = "\n".join(prompt_parts)
+
+        # Persist user message (text only - images not stored in DB)
+        user_msg = ChatMessage(item_id=item_id, role="user", content=message)
+        db.add(user_msg)
+        db.commit()
+        db.refresh(user_msg)
+
+        # Call the LLM
+        try:
+            result = await chat_agent.run(full_prompt)
+            assistant_content = result.output
+        except Exception as exc:
+            logger.exception("LLM call failed for chat item %s (with image)", item_id)
+            assistant_content = f"Sorry, I encountered an error: {exc}"
+
+        # Persist assistant reply
+        assistant_msg = ChatMessage(item_id=item_id, role="assistant", content=assistant_content)
+        db.add(assistant_msg)
+        db.commit()
+        db.refresh(assistant_msg)
+
+        return assistant_msg
+    except Exception as exc:
+        logger.exception("Chat image endpoint failed for %s", item_id)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/chat/{item_id}/stream", response_model=ChatMessageSchema)
+async def send_chat_message_stream(
+    item_id: str,
+    req: ChatRequest,
+    db: Session = Depends(get_db),
+) -> ChatMessage:
+    """Send a user message, stream the LLM response via WebSocket tokens, return final message."""
+    try:
+        if item_id.startswith("sel-"):
+            item = None
+        else:
+            item = db.query(BoQItem).filter(BoQItem.id == item_id).first()
+
+        history = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.item_id == item_id)
+            .order_by(ChatMessage.created_at)
+            .all()
+        )
+
+        prompt_parts: list[str] = []
+        if item:
+            prompt_parts.append("=== BOQ Item Context ===")
+            prompt_parts.append(_build_item_context(item))
+            prompt_parts.append("")
+        if history:
+            prompt_parts.append("=== Conversation History ===")
+            for msg in history[-10:]:
+                prompt_parts.append(f"{msg.role}: {msg.content}")
+            prompt_parts.append("")
+        prompt_parts.append(f"user: {req.message}")
+
+        full_prompt = "\n".join(prompt_parts)
+
+        # Persist the user message
+        user_msg = ChatMessage(item_id=item_id, role="user", content=req.message)
+        db.add(user_msg)
+        db.commit()
+        db.refresh(user_msg)
+
+        # Stream the LLM response
+        accumulated = ""
+        try:
+            async with chat_agent.run_stream(full_prompt) as stream:
+                async for token in stream.stream_text(delta=True):
+                    accumulated += token
+                    await emit(CHAT_TOKEN, {
+                        "item_id": item_id,
+                        "token": token,
+                    })
+        except Exception as exc:
+            logger.exception("LLM stream failed for chat item %s", item_id)
+            accumulated = f"Sorry, I encountered an error: {exc}"
+
+        # Persist the assistant reply
+        assistant_msg = ChatMessage(item_id=item_id, role="assistant", content=accumulated)
+        db.add(assistant_msg)
+        db.commit()
+        db.refresh(assistant_msg)
+
+        # Signal completion
+        await emit(CHAT_COMPLETE, {"item_id": item_id})
+
+        return assistant_msg
+    except Exception as exc:
+        logger.exception("Chat stream endpoint failed for %s", item_id)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))

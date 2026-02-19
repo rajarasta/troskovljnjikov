@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -10,8 +11,9 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.boq import BoQFile, BoQItem, BoQUnit
 from app.schemas.boq import FileUploadResponse
+from app.services.autopilot import run_autopilot
 from app.services.boq_indexer import index_file
-from app.services.rag import index_items as rag_index_items
+from app.services.rag import index_items as rag_index_items, index_for_search
 
 router = APIRouter()
 
@@ -50,9 +52,11 @@ async def upload_file(
         sheet_count=result["file"]["sheetCount"],
         item_count=result["file"]["itemCount"],
         project_name=result["file"].get("projectName"),
-        column_mapping=None,
+        column_mapping=result["file"].get("columnMappings"),
         missing_data=result["file"].get("missingData"),
         raw_preview=result["file"].get("rawPreview"),
+        header_rows=result["file"].get("headerRows"),
+        date_source="upload",
         indexed_at=datetime.utcnow(),
     )
     db.add(db_file)
@@ -76,6 +80,7 @@ async def upload_file(
             unit_id=None,
             project_name=item_data.get("projectName"),
             date=item_data.get("date"),
+            item_type=item_data.get("itemType"),
         )
         db.add(db_item)
 
@@ -98,12 +103,21 @@ async def upload_file(
 
     db.commit()
 
-    # Index items into RAG for vector search
-    parent_map = {
-        u.get("parentItemNumber", ""): u.get("parentDescription") or u.get("parentTitle") or ""
-        for u in result.get("units", [])
-    }
-    rag_index_items(file_id, result["items"], parent_map)
+    # Index items into RAG for vector search (dual-level)
+    index_for_search(
+        file_id=file_id,
+        items=result["items"],
+        units=result.get("units", []),
+        file_date=result["file"].get("date"),
+    )
+
+    # Trigger autopilot in background (batch match + LLM summary + price suggestions)
+    asyncio.create_task(run_autopilot(
+        file_id=file_id,
+        items=result["items"],
+        units=result.get("units", []),
+        file_info=result["file"],
+    ))
 
     return FileUploadResponse(
         file_id=file_id,

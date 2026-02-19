@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 
 interface ColumnHeaderProps {
   title: string;
-  accent?: "cyan" | "purple";
+  accent?: "cyan" | "purple" | "amber";
   badge?: string;
   icon?: ReactNode;
   actions?: ReactNode;
@@ -24,6 +24,13 @@ const accentStyles = {
     badgeBg: "bg-accent-purple/10",
     badgeText: "text-accent-purple",
     badgeBorder: "border-accent-purple/20",
+  },
+  amber: {
+    text: "text-accent-amber",
+    border: "border-accent-amber/30",
+    badgeBg: "bg-accent-amber/10",
+    badgeText: "text-accent-amber",
+    badgeBorder: "border-accent-amber/20",
   },
 } as const;
 

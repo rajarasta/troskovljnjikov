@@ -383,6 +383,35 @@ def is_subtotal_row(row: list[Any], column_map: dict[str, int]) -> dict:
     return {'isSubtotal': False, 'total': 0.0}
 
 
+def classify_item_type(
+    item: dict[str, Any],
+    unit_parent_numbers: set[str],
+) -> str:
+    """Classify a hierarchy item into one of the BoQ item types.
+
+    Args:
+        item: A dict from build_hierarchy() output.
+        unit_parent_numbers: Set of parentItemNumber values from group_into_units().
+
+    Returns:
+        One of: "section_header", "composite_sub", "ne_nudimo", "simple".
+    """
+    if item.get("isParent"):
+        return "section_header"
+
+    parent_num = item.get("parentItemNumber")
+    if parent_num and parent_num in unit_parent_numbers:
+        return "composite_sub"
+
+    unit_price = item.get("unitPrice", 0) or 0
+    total = item.get("total", 0) or 0
+    desc = item.get("description", "")
+    if unit_price == 0 and total == 0 and len(desc) >= 3:
+        return "ne_nudimo"
+
+    return "simple"
+
+
 def group_into_units(
     hierarchy_items: list[dict],
     rows: list[list[Any]],

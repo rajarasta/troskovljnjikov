@@ -3,6 +3,7 @@
 import { useCallback, useMemo, forwardRef } from "react";
 import { Pencil } from "lucide-react";
 import { useBoQStore } from "@/stores/boqStore";
+import { EditableDescriptionCell } from "./EditableDescriptionCell";
 import type { BoQItem } from "@/lib/types";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -80,6 +81,7 @@ const EditableSheet = forwardRef<HTMLDivElement>(function EditableSheet(_props, 
   const items = useBoQStore((s) => s.items);
   const selectedRow = useBoQStore((s) => s.selectedRow);
   const selectRow = useBoQStore((s) => s.selectRow);
+  const updateWorkingItem = useBoQStore((s) => s.updateWorkingItem);
 
   const parentSet = useMemo(() => buildParentSet(workingItems), [workingItems]);
 
@@ -172,13 +174,21 @@ const EditableSheet = forwardRef<HTMLDivElement>(function EditableSheet(_props, 
                   {wItem.item_number}
                 </td>
 
-                {/* Description */}
+                {/* Description — editable with inline autocomplete */}
                 <td
-                  className={`px-3 py-1.5 whitespace-pre-wrap break-words ${
-                    isSelected ? "text-accent-purple" : "text-text-primary"
-                  }`}
+                  className="px-3 py-1.5 align-top"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  {wItem.description}
+                  <EditableDescriptionCell
+                    value={wItem.description}
+                    itemId={wItem.id}
+                    textColor={isSelected ? "text-accent-purple" : undefined}
+                    context={workingItems
+                      .slice(Math.max(0, index - 2), index + 3)
+                      .filter((i) => i.id !== wItem.id)
+                      .map((i) => ({ item_number: i.item_number, description: i.description }))}
+                    onCommit={(id, newDesc) => updateWorkingItem(id, { description: newDesc })}
+                  />
                 </td>
 
                 {/* Qty (editable) */}

@@ -49,13 +49,14 @@ export default function RawSheetGrid() {
   const [scrollTop, setScrollTop] = useState(0);
 
   // Get all sheets and active sheet
-  const sheets = useMemo(() => {
-    if (!selectedFileId) return [];
+  const { sheets, headerRows } = useMemo(() => {
+    if (!selectedFileId) return { sheets: [], headerRows: null };
     const file = files.find((f) => f.id === selectedFileId);
-    if (!file?.raw_preview) return [];
-    return Object.entries(file.raw_preview)
+    if (!file?.raw_preview) return { sheets: [], headerRows: null };
+    const sheetList = Object.entries(file.raw_preview)
       .filter(([, rows]) => rows.length > 0)
       .map(([name, rows]) => ({ name, rows }));
+    return { sheets: sheetList, headerRows: file.header_rows };
   }, [files, selectedFileId]);
 
   const [activeSheet, setActiveSheet] = useState(0);
@@ -70,6 +71,18 @@ export default function RawSheetGrid() {
     }, 0);
     return { rows: data, colCount: cc };
   }, [sheets, activeSheet]);
+
+  // Compute column header labels from detected header row
+  const colHeaders = useMemo(() => {
+    if (!headerRows || sheets.length === 0) return null;
+    const activeSheetData = sheets[Math.min(activeSheet, sheets.length - 1)];
+    if (!activeSheetData) return null;
+    const headerRowIndex = headerRows[activeSheetData.name];
+    if (headerRowIndex == null || headerRowIndex < 0) return null;
+    const headerRow = activeSheetData.rows[headerRowIndex];
+    if (!headerRow) return null;
+    return headerRow; // string[] of header cell values
+  }, [headerRows, sheets, activeSheet]);
 
   // Virtual scroll: compute visible row range
   const containerHeight = scrollRef.current?.clientHeight ?? 600;
@@ -150,7 +163,8 @@ export default function RawSheetGrid() {
     } else {
       // No parsed item match — directly search with the cell text
       const searchText = texts.join(" ");
-      startLookup(searchText);
+      const adHocId = `raw-${Date.now()}`;
+      startLookup(adHocId, searchText);
     }
   }, [selection, selBounds, rows, items, addSelection, startLookup]);
 
@@ -205,13 +219,15 @@ export default function RawSheetGrid() {
             />
             {Array.from({ length: colCount }, (_, i) => {
               const w = colWidth(i);
+              const headerText = colHeaders?.[i]?.trim() || colLetter(i);
               return (
                 <div
                   key={i}
-                  className="shrink-0 flex items-center justify-center text-[10px] font-mono font-semibold text-text-secondary bg-bg-tertiary border-r border-b border-border-default"
+                  className="shrink-0 flex items-center justify-center text-[10px] font-mono font-semibold text-text-secondary bg-bg-tertiary border-r border-b border-border-default truncate px-1"
                   style={{ width: w, minWidth: w, height: ROW_HEIGHT }}
+                  title={headerText}
                 >
-                  {colLetter(i)}
+                  {headerText}
                 </div>
               );
             })}

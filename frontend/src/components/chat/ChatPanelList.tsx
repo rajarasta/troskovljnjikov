@@ -19,7 +19,7 @@ export default function ChatPanelList() {
   }, [activePanelId]);
 
   return (
-    <div className="glass-panel flex flex-col min-h-0">
+    <div className="glass-panel flex flex-col min-h-0 h-full overflow-hidden">
       <ColumnHeader
         title="Chat"
         accent="cyan"

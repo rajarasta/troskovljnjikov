@@ -12,17 +12,18 @@ export default function SheetPreview() {
   const files = useBoQStore((s) => s.files);
   const selectedFileId = useBoQStore((s) => s.selectedFileId);
 
-  const { sheetName, rows } = useMemo(() => {
-    if (!selectedFileId) return { sheetName: null, rows: [] };
+  const { sheetName, rows, headerRowIndex } = useMemo(() => {
+    if (!selectedFileId) return { sheetName: null, rows: [], headerRowIndex: null };
     const file = files.find((f) => f.id === selectedFileId);
-    if (!file?.raw_preview) return { sheetName: null, rows: [] };
+    if (!file?.raw_preview) return { sheetName: null, rows: [], headerRowIndex: null };
 
     // Use first sheet's preview
     const entries = Object.entries(file.raw_preview);
-    if (entries.length === 0) return { sheetName: null, rows: [] };
+    if (entries.length === 0) return { sheetName: null, rows: [], headerRowIndex: null };
 
     const [name, data] = entries[0];
-    return { sheetName: name, rows: data };
+    const hrIdx = file.header_rows?.[name] ?? null;
+    return { sheetName: name, rows: data, headerRowIndex: hrIdx };
   }, [files, selectedFileId]);
 
   if (!sheetName || rows.length === 0) return null;
@@ -35,6 +36,11 @@ export default function SheetPreview() {
   }, 0);
 
   if (colCount === 0) return null;
+
+  // Get header labels from detected header row
+  const colHeaders = headerRowIndex != null && headerRowIndex >= 0 && rows[headerRowIndex]
+    ? rows[headerRowIndex]
+    : null;
 
   return (
     <div className="border border-border-default rounded overflow-hidden">
@@ -55,14 +61,18 @@ export default function SheetPreview() {
           <thead>
             <tr className="bg-bg-tertiary">
               <th className="w-8 min-w-[32px] px-1 py-0.5 text-center text-text-muted border-r border-b border-border-default" />
-              {Array.from({ length: colCount }, (_, i) => (
-                <th
-                  key={i}
-                  className="px-2 py-0.5 text-center text-text-muted font-medium border-r border-b border-border-default last:border-r-0"
-                >
-                  {colLetter(i)}
-                </th>
-              ))}
+              {Array.from({ length: colCount }, (_, i) => {
+                const headerText = colHeaders?.[i]?.trim() || colLetter(i);
+                return (
+                  <th
+                    key={i}
+                    className="px-2 py-0.5 text-center text-text-muted font-medium border-r border-b border-border-default last:border-r-0 truncate max-w-[180px]"
+                    title={headerText}
+                  >
+                    {headerText}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
 

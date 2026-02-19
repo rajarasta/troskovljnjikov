@@ -30,7 +30,7 @@ interface ChatMessageProps {
 }
 
 export default function ChatMessage({ message }: ChatMessageProps) {
-  const { role, content, created_at } = message;
+  const { role, content, created_at, image_url } = message;
 
   // System messages: centered, muted, small
   if (role === "system") {
@@ -41,9 +41,9 @@ export default function ChatMessage({ message }: ChatMessageProps) {
         animate="visible"
         className="flex justify-center px-4 py-1"
       >
-        <div className="text-[11px] text-text-muted italic text-center max-w-[80%]">
+        <div className="text-[10px] text-text-muted italic text-center max-w-[80%]">
           <p className="whitespace-pre-wrap">{content}</p>
-          <span className="text-[10px] text-text-muted/60 font-mono mt-0.5 block">
+          <span className="text-[9px] text-text-muted/60 font-mono mt-0.5 block">
             {formatTimestamp(created_at)}
           </span>
         </div>
@@ -62,7 +62,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
     >
       <div
         className={`
-          max-w-[75%] px-3 py-2 rounded-lg text-sm
+          max-w-[75%] px-2 py-1.5 rounded-lg text-[11px]
           ${
             isUser
               ? "bg-accent-cyan/15 border border-accent-cyan/25 text-text-primary rounded-br-sm"
@@ -70,12 +70,19 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           }
         `}
       >
-        <p className="whitespace-pre-wrap break-words leading-relaxed">
+        {image_url && (
+          <img
+            src={image_url}
+            alt="Attached"
+            className="max-w-full max-h-40 rounded border border-border-default/50 mb-1 object-contain"
+          />
+        )}
+        <p className="whitespace-pre-wrap break-words leading-snug">
           {content}
         </p>
         <span
           className={`
-            text-[10px] font-mono mt-1 block
+            text-[9px] font-mono mt-0.5 block
             ${isUser ? "text-accent-cyan/50 text-right" : "text-text-muted"}
           `}
         >

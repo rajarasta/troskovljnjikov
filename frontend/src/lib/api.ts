@@ -119,6 +119,19 @@ export async function sendChatMessage(
   });
 }
 
+/** Send a chat message with streaming LLM response via WebSocket tokens.
+ * Fires the POST and returns. Tokens arrive via WS events (chat:token, chat:complete).
+ * The final message is returned when streaming is done. */
+export async function sendChatMessageStreaming(
+  itemId: string,
+  message: string
+): Promise<ChatMessage> {
+  return fetchAPI<ChatMessage>(`/api/chat/${itemId}/stream`, {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+
 export async function sendChatMessageWithImage(
   itemId: string,
   message: string,
@@ -228,6 +241,22 @@ export async function analyzeSelection(
 /** Fetch IWorkbookData JSON for Univer rendering */
 export async function fetchWorkbookData(fileId: string): Promise<Record<string, unknown>> {
   return fetchAPI<Record<string, unknown>>(`/api/files/${fileId}/workbook-data`);
+}
+
+// ── Autopilot operations ─────────────────────────────────────────────
+
+/** Fetch resolved match results from autopilot cache (skips ChromaDB query) */
+export async function fetchCachedMatches(
+  fileId: string,
+  itemId: string,
+  quantity?: number,
+): Promise<MatchResponse> {
+  const params = new URLSearchParams();
+  if (quantity !== undefined) params.set("quantity", String(quantity));
+  const query = params.toString();
+  return fetchAPI<MatchResponse>(
+    `/api/autopilot/${fileId}/matches-resolved/${encodeURIComponent(itemId)}${query ? `?${query}` : ""}`,
+  );
 }
 
 // ── Inline completion ────────────────────────────────────────────────

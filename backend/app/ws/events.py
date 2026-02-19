@@ -28,6 +28,18 @@ PRICE_SUGGESTED = "price:suggested"
 FILE_INDEXED = "file:indexed"
 COLUMN_DETECTED = "column:detected"
 
+# Autopilot events
+AUTOPILOT_SUMMARY_TOKEN = "autopilot:summary_token"
+AUTOPILOT_MATCH_PROGRESS = "autopilot:match_progress"
+AUTOPILOT_MATCH_RESULT = "autopilot:match_result"
+AUTOPILOT_PRICE_SUGGESTED = "autopilot:price_suggested"
+AUTOPILOT_COMPLETE = "autopilot:complete"
+AUTOPILOT_ERROR = "autopilot:error"
+
+# Chat streaming events
+CHAT_TOKEN = "chat:token"
+CHAT_COMPLETE = "chat:complete"
+
 
 async def emit(
     event_type: str,

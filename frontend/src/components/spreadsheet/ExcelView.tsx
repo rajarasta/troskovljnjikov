@@ -15,7 +15,24 @@ import UniverPresetSheetsDrawingEnUS from "@univerjs/preset-sheets-drawing/local
 import "@univerjs/preset-sheets-core/lib/index.css";
 import "@univerjs/preset-sheets-drawing/lib/index.css";
 
-export default function ExcelView() {
+/** Apply or remove text wrap on every cell across all sheets */
+function applyWrapToAllSheets(univerAPI: ReturnType<typeof createUniver>["univerAPI"]) {
+  try {
+    const workbook = univerAPI.getActiveWorkbook();
+    if (!workbook) return;
+    const sheet = workbook.getActiveSheet();
+    if (!sheet) return;
+    const maxRow = sheet.getMaxRows();
+    const maxCol = sheet.getMaxColumns();
+    if (maxRow > 0 && maxCol > 0) {
+      sheet.getRange(0, 0, maxRow, maxCol).setWrap(true);
+    }
+  } catch {
+    // Univer API may not be fully ready yet — ignore
+  }
+}
+
+export default function ExcelView({ wrapAll = true }: { wrapAll?: boolean }) {
   const selectedFileId = useBoQStore((s) => s.selectedFileId);
   const addSelection = useSelectionStore((s) => s.addSelection);
   const removeSelection = useSelectionStore((s) => s.removeSelection);
@@ -80,10 +97,9 @@ export default function ExcelView() {
         // Create workbook directly from our data
         univerAPI.createWorkbook(workbookData);
 
-        // Set read-only mode
-        const workbook = univerAPI.getActiveWorkbook();
-        if (workbook) {
-          workbook.setEditable(false);
+        // Apply text wrap to all cells if enabled
+        if (wrapAll) {
+          applyWrapToAllSheets(univerAPI);
         }
 
         // Listen for selection changes -> trigger pipeline via selectionStore (debounced)
@@ -178,6 +194,25 @@ export default function ExcelView() {
       }
     };
   }, [selectedFileId, addSelection, removeSelection]);
+
+  // Toggle wrap on existing workbook when prop changes
+  useEffect(() => {
+    if (!univerRef.current) return;
+    const { univerAPI } = univerRef.current;
+    try {
+      const workbook = univerAPI.getActiveWorkbook();
+      if (!workbook) return;
+      const sheet = workbook.getActiveSheet();
+      if (!sheet) return;
+      const maxRow = sheet.getMaxRows();
+      const maxCol = sheet.getMaxColumns();
+      if (maxRow > 0 && maxCol > 0) {
+        sheet.getRange(0, 0, maxRow, maxCol).setWrap(!!wrapAll);
+      }
+    } catch {
+      // ignore
+    }
+  }, [wrapAll]);
 
   if (!selectedFileId) {
     return (

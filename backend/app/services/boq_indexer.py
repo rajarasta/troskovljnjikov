@@ -16,7 +16,7 @@ from typing import Any, Optional
 import openpyxl
 from openpyxl.worksheet.worksheet import Worksheet
 
-from app.services.boq_hierarchy import build_hierarchy, group_into_units
+from app.services.boq_hierarchy import build_hierarchy, classify_item_type, group_into_units
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -81,6 +81,47 @@ KNOWN_UNITS: set[str] = {
     "l", "lit", "set", "pauš", "paušal", "pau", "h", "sat", "dan",
     "cm", "mm", "km", "t", "ton", "%", "m1", "ml",
 }
+
+# Date patterns found in Croatian BoQ filenames
+_DATE_PATTERNS: list[tuple[str, str]] = [
+    (r"(\d{4})-(\d{1,2})-(\d{1,2})", "%Y-%m-%d"),        # 2025-06-09
+    (r"(\d{1,2})\.(\d{1,2})\.(\d{4})", "%d.%m.%Y"),       # 1.12.2025
+    (r"(\d{1,2})\.(\d{1,2})\.(\d{2})\b", "%d.%m.%y"),     # 7.4.24
+    (r"(\d{2})(\d{2})(\d{4})", None),                      # DDMMYYYY
+]
+
+
+def resolve_file_date(file_name: str, file_path: str) -> tuple[datetime | None, str]:
+    """Try to extract a date from the filename, falling back to file mtime.
+
+    Returns:
+        (date_or_none, source) where source is "filename", "file_mtime", or "manual".
+    """
+    # Try filename patterns
+    for pattern, fmt in _DATE_PATTERNS:
+        m = re.search(pattern, file_name)
+        if m:
+            try:
+                if fmt:
+                    date_str = m.group(0).rstrip(".")
+                    parsed = datetime.strptime(date_str, fmt)
+                else:
+                    # DDMMYYYY
+                    d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                    parsed = datetime(y, mo, d)
+                if 2000 <= parsed.year <= 2030:
+                    return parsed, "filename"
+            except (ValueError, OverflowError):
+                continue
+
+    # Fall back to file mtime
+    try:
+        mtime = os.path.getmtime(file_path)
+        return datetime.fromtimestamp(mtime), "file_mtime"
+    except OSError:
+        pass
+
+    return None, "manual"
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +433,9 @@ def extract_items_from_sheet(
     # Group items into BoQ units
     boq_units = group_into_units(hierarchy_items, rows, column_map, file_path, sheet_name)
 
+    # Build unit parent numbers set for item type classification
+    unit_parent_numbers = {u.get("parentItemNumber", "") for u in boq_units}
+
     # Build row -> unit_id lookup
     row_to_unit_id: dict[int, str] = {}
     for unit in boq_units:
@@ -444,6 +488,9 @@ def extract_items_from_sheet(
             # Metadata
             "projectName": project_name,
             "date": date_str,
+
+            # Item type classification
+            "itemType": classify_item_type(hi, unit_parent_numbers),
         }
 
         description = item.get("description", "") or ""
@@ -451,7 +498,12 @@ def extract_items_from_sheet(
         if len(description) >= 3 or len(full_description) >= 3:
             items.append(item)
 
-    return {"items": items, "units": boq_units}
+    return {
+        "items": items,
+        "units": boq_units,
+        "columnMap": column_map,
+        "dataStartRow": data_start_row,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +573,8 @@ def index_file(
         units: list[dict[str, Any]] = []
         sheet_infos: list[dict[str, Any]] = []
         raw_preview: dict[str, list[list[Any]]] = {}  # sheet_name -> first N rows
+        header_rows: dict[str, int] = {}  # sheet_name -> header_row_index
+        column_mappings: dict[str, dict[str, Any]] = {}  # sheet_name -> {columns, dataStartRow}
         missing_price_count = 0
         missing_quantity_count = 0
         missing_unit_count = 0
@@ -562,12 +616,24 @@ def index_file(
                 ])
             raw_preview[sheet_name] = preview_rows
 
+            # Detect header row index for this sheet
+            hr_index, _hr_map, hr_count = find_best_header_row(preview_rows)
+            if hr_count >= 2:  # require at least 2 column matches to be confident
+                header_rows[sheet_name] = hr_index
+
             ext_mapping = sheet_mappings.get(sheet_name)
             sheet_result = extract_items_from_sheet(
                 ws, file_name, file_path, sheet_name, file_date, ext_mapping,
             )
             items.extend(sheet_result["items"])
             units.extend(sheet_result["units"])
+
+            # Collect column mapping for this sheet
+            if sheet_result.get("columnMap"):
+                column_mappings[sheet_name] = {
+                    "columns": sheet_result["columnMap"],
+                    "dataStartRow": sheet_result.get("dataStartRow", 0),
+                }
 
             # Count missing data
             for item in sheet_result["items"]:
@@ -604,6 +670,8 @@ def index_file(
                     "units": missing_unit_count,
                 },
                 "rawPreview": raw_preview,
+                "headerRows": header_rows if header_rows else None,
+                "columnMappings": column_mappings if column_mappings else None,
             },
             "items": items,
             "units": units,

@@ -18,6 +18,8 @@ class FileInfo(BaseModel):
     item_count: int
     sheet_count: int
     raw_preview: dict[str, list[list[str]]] | None = None
+    header_rows: dict[str, int] | None = None
+    column_mapping: dict | None = None
     date_source: str | None = None
     indexed_at: datetime
 
@@ -47,6 +49,7 @@ class BoQItemSchema(BaseModel):
     notes: str | None = None
     drawing_path: str | None = None
     llm_response: str | None = None
+    file_name: str | None = None
 
     model_config = {"from_attributes": True}
 

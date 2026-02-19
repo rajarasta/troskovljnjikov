@@ -7,6 +7,7 @@ import { useWebSocket } from "@/hooks/useWebSocket";
 import { useBoQStore } from "@/stores/boqStore";
 import { useAgentStore } from "@/stores/agentStore";
 import { useSelectionPipeline } from "@/hooks/useSelectionPipeline";
+import { useKeyboardNav } from "@/hooks/useKeyboardNav";
 
 import TopBar from "@/components/layout/TopBar";
 import ChatPanelList from "@/components/chat/ChatPanelList";
@@ -77,6 +78,7 @@ export default function HomePage() {
 
   // ── Pipeline hooks ──────────────────────────────────────────────
   useSelectionPipeline();
+  useKeyboardNav();
 
   // Initialize column widths from actual container size
   useEffect(() => {

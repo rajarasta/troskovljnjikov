@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { BoQFile, BoQItem } from "@/lib/types";
 import * as api from "@/lib/api";
 import { MOCK_ITEMS } from "@/lib/mockData";
+import { useChatPanelStore } from "./chatPanelStore";
 
 interface BoQState {
   // ── State ───────────────────────────────────────────────────────
@@ -20,7 +21,7 @@ interface BoQState {
   loadMockData: () => void;
   selectRow: (row: BoQItem | null) => void;
   deleteFile: (fileId: string) => Promise<void>;
-  updateWorkingItem: (itemId: string, updates: Partial<Pick<BoQItem, "quantity" | "unit_price" | "total">>) => void;
+  updateWorkingItem: (itemId: string, updates: Partial<Pick<BoQItem, "quantity" | "unit_price" | "total" | "description">>) => void;
 }
 
 export const useBoQStore = create<BoQState>((set, get) => ({
@@ -40,6 +41,11 @@ export const useBoQStore = create<BoQState>((set, get) => ({
       const files = await api.fetchFiles();
       set({ files, selectedFileId: fileId, isLoading: false });
       await get().loadItems(fileId);
+
+      // Create auto-summary chat panel (autopilot will stream tokens via WS)
+      const chatStore = useChatPanelStore.getState();
+      const panelId = chatStore.createPanel(`file:${fileId}`, `Summary: ${file.name}`);
+      chatStore.setAnalyzing(panelId, true);
     } catch (err) {
       set({
         isLoading: false,
@@ -113,7 +119,7 @@ export const useBoQStore = create<BoQState>((set, get) => ({
     }
   },
 
-  updateWorkingItem: (itemId: string, updates: Partial<Pick<BoQItem, "quantity" | "unit_price" | "total">>) => {
+  updateWorkingItem: (itemId: string, updates: Partial<Pick<BoQItem, "quantity" | "unit_price" | "total" | "description">>) => {
     set((state) => ({
       workingItems: state.workingItems.map((item) => {
         if (item.id !== itemId) return item;

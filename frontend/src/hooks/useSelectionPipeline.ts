@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import { useSelectionStore } from "@/stores/selectionStore";
 import { useChatPanelStore } from "@/stores/chatPanelStore";
 import { useMatchStore } from "@/stores/matchStore";
-import { analyzeSelection } from "@/lib/api";
+import { useAutopilotStore } from "@/stores/autopilotStore";
+import { analyzeSelection, fetchCachedMatches } from "@/lib/api";
 import type { ChatMessage } from "@/lib/types";
 
 /**
@@ -24,11 +25,14 @@ function isValidChatMessage(obj: any): obj is ChatMessage {
  * Watches selection store. When a new selection is created:
  * 1. Triggers match lookup (deterministic pipeline -> column 2)
  * 2. Creates a chat panel and requests LLM analysis -> column 1
+ *
+ * Store actions are accessed via getState() inside the effect so the
+ * only reactive dependency is `selections`. This prevents the effect
+ * from re-firing when chat panels or match results update, which was
+ * causing panels to be spuriously cleaned up and recreated.
  */
 export function useSelectionPipeline() {
   const selections = useSelectionStore((s) => s.selections);
-  const startLookup = useMatchStore((s) => s.startLookup);
-  const { createPanel, addMessage, setAnalyzing, removePanel, panelExists } = useChatPanelStore();
   const processedIds = useRef(new Set<string>());
   const abortControllers = useRef(new Map<string, AbortController>());
 
@@ -44,14 +48,40 @@ export function useSelectionPipeline() {
           ? `Row ${selection.items[0]?.item_number ?? selection.startIndex}`
           : `Rows ${selection.items[0]?.item_number ?? selection.startIndex}\u2013${selection.items[selection.items.length - 1]?.item_number ?? selection.endIndex}`;
 
-      // 1. Trigger deterministic match lookup
+      // 1. Match lookup — check autopilot cache first for single-item selections
       const combinedDesc = descriptions.join("\n");
       const qty = selection.items[0]?.quantity ?? 0;
-      startLookup(combinedDesc, qty);
+      const fileId = selection.items[0]?.file_id || undefined;
+      const startRow = Math.min(...selection.items.map((i) => i.row));
+      const endRow = Math.max(...selection.items.map((i) => i.row));
+      const firstItem = selection.items[0];
+      const autopilotConfidence = fileId && firstItem
+        ? useAutopilotStore.getState().getConfidence(fileId, firstItem.id)
+        : null;
+
+      if (autopilotConfidence && fileId && firstItem && selection.items.length === 1) {
+        // Use cached matches from autopilot (resolved via backend endpoint, no ChromaDB query)
+        fetchCachedMatches(fileId, firstItem.id, qty)
+          .then((response) => {
+            useMatchStore.getState().setCachedResults(selection.id, response.matches, response.stats);
+          })
+          .catch(() => {
+            // Fall back to regular search if cache fetch fails
+            useMatchStore.getState().startLookup(
+              selection.id, combinedDesc, qty, fileId, startRow, endRow,
+            );
+          });
+      } else {
+        // No cache hit or multi-item selection — standard search
+        useMatchStore.getState().startLookup(
+          selection.id, combinedDesc, qty, fileId, startRow, endRow,
+        );
+      }
 
       // 2. Create chat panel + request LLM analysis
-      const panelId = createPanel(selection.id, label);
-      setAnalyzing(panelId, true);
+      const chatStore = useChatPanelStore.getState();
+      const panelId = chatStore.createPanel(selection.id, label);
+      chatStore.setAnalyzing(panelId, true);
 
       // Create abort controller for this request
       const controller = new AbortController();
@@ -59,46 +89,41 @@ export function useSelectionPipeline() {
 
       analyzeSelection(selection.id, descriptions, combinedDesc, controller.signal)
         .then((response) => {
-          // Check if panel still exists before updating
-          if (panelExists(panelId)) {
-            // Validate response before adding
-            if (!isValidChatMessage(response)) {
-              console.error('[useSelectionPipeline] Invalid chat message response:', response);
-              const errorMsg: ChatMessage = {
-                id: `err-${Date.now()}`,
-                item_id: selection.id,
-                role: "system",
-                content: "Analysis returned invalid data format",
-                created_at: new Date().toISOString(),
-              };
-              addMessage(panelId, errorMsg);
-              setAnalyzing(panelId, false);
-              return;
-            }
-            addMessage(panelId, response);
-            setAnalyzing(panelId, false);
-          }
-        })
-        .catch((err) => {
-          // Ignore abort errors (expected when cleaning up)
-          if (err.name === 'AbortError') {
-            return;
-          }
-          // Check if panel still exists before adding error message
-          if (panelExists(panelId)) {
-            const errorMsg: ChatMessage = {
+          // Re-read store at resolution time for latest state
+          const store = useChatPanelStore.getState();
+          if (!store.panelExists(panelId)) return;
+
+          if (!isValidChatMessage(response)) {
+            console.error('[useSelectionPipeline] Invalid chat message response:', response);
+            store.addMessage(panelId, {
               id: `err-${Date.now()}`,
               item_id: selection.id,
               role: "system",
-              content: `Analysis failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+              content: "Analysis returned invalid data format",
               created_at: new Date().toISOString(),
-            };
-            addMessage(panelId, errorMsg);
-            setAnalyzing(panelId, false);
+            });
+            store.setAnalyzing(panelId, false);
+            return;
           }
+          store.addMessage(panelId, response);
+          store.setAnalyzing(panelId, false);
+        })
+        .catch((err) => {
+          if (err.name === 'AbortError') return;
+
+          const store = useChatPanelStore.getState();
+          if (!store.panelExists(panelId)) return;
+
+          store.addMessage(panelId, {
+            id: `err-${Date.now()}`,
+            item_id: selection.id,
+            role: "system",
+            content: `Analysis failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+            created_at: new Date().toISOString(),
+          });
+          store.setAnalyzing(panelId, false);
         })
         .finally(() => {
-          // Clean up abort controller
           abortControllers.current.delete(selection.id);
         });
     }
@@ -116,11 +141,13 @@ export function useSelectionPipeline() {
         // Remove associated chat panel
         const panel = useChatPanelStore.getState().getPanelBySelection(id);
         if (panel) {
-          removePanel(panel.id);
+          useChatPanelStore.getState().removePanel(panel.id);
         }
+        // Remove associated match results
+        useMatchStore.getState().clearSelection(id);
         // Clean up tracking
         processedIds.current.delete(id);
       }
     }
-  }, [selections, startLookup, createPanel, addMessage, setAnalyzing, removePanel, panelExists]);
+  }, [selections]);
 }

@@ -1,43 +1,146 @@
 import { create } from "zustand";
-import type { MatchResult, MatchStats } from "@/lib/types";
+import type { MatchResult, MatchStats, MatchGroup } from "@/lib/types";
 import * as api from "@/lib/api";
 
-interface MatchState {
-  // ── State ───────────────────────────────────────────────────────
+/** Per-selection match results */
+export interface SelectionMatchState {
   matches: MatchResult[];
   stats: MatchStats | null;
   isSearching: boolean;
   error: string | null;
-
-  // ── Actions ─────────────────────────────────────────────────────
-  startLookup: (description: string, quantity?: number) => Promise<void>;
-  clearMatches: () => void;
+  groups: MatchGroup[] | null;
+  isComposite: boolean;
+  parentDescription: string | null;
 }
 
-export const useMatchStore = create<MatchState>((set) => ({
+interface MatchState {
+  // ── State ───────────────────────────────────────────────────────
+  /** Match results keyed by selection ID */
+  resultsBySelection: Record<string, SelectionMatchState>;
+
+  // ── Actions ─────────────────────────────────────────────────────
+  startLookup: (
+    selectionId: string,
+    description: string,
+    quantity?: number,
+    fileId?: string,
+    startRow?: number,
+    endRow?: number,
+  ) => Promise<void>;
+  /** Populate results from autopilot cache without API call */
+  setCachedResults: (selectionId: string, matches: MatchResult[], stats?: MatchStats | null) => void;
+  clearSelection: (selectionId: string) => void;
+  clearAll: () => void;
+}
+
+const emptyResult: SelectionMatchState = {
   matches: [],
   stats: null,
   isSearching: false,
   error: null,
+  groups: null,
+  isComposite: false,
+  parentDescription: null,
+};
 
-  startLookup: async (description: string, quantity?: number) => {
-    set({ isSearching: true, error: null });
+export const useMatchStore = create<MatchState>((set, get) => ({
+  resultsBySelection: {},
+
+  startLookup: async (
+    selectionId: string,
+    description: string,
+    quantity?: number,
+    fileId?: string,
+    startRow?: number,
+    endRow?: number,
+  ) => {
+    // Mark this selection as searching
+    set((s) => ({
+      resultsBySelection: {
+        ...s.resultsBySelection,
+        [selectionId]: {
+          ...(s.resultsBySelection[selectionId] ?? emptyResult),
+          isSearching: true,
+          error: null,
+        },
+      },
+    }));
+
     try {
-      const response = await api.matchItems(description, quantity);
-      set({
-        matches: response.matches,
-        stats: response.stats,
-        isSearching: false,
-      });
+      const response = await api.matchItems(
+        description, quantity, undefined, fileId, startRow, endRow,
+      );
+      // Only update if selection still exists (wasn't removed while searching)
+      const current = get().resultsBySelection[selectionId];
+      if (current) {
+        set((s) => ({
+          resultsBySelection: {
+            ...s.resultsBySelection,
+            [selectionId]: {
+              matches: response.matches,
+              stats: response.stats,
+              isSearching: false,
+              error: null,
+              groups: response.groups ?? null,
+              isComposite: response.is_composite ?? false,
+              parentDescription: response.parent_description ?? null,
+            },
+          },
+        }));
+      }
     } catch (err) {
-      set({
-        isSearching: false,
-        error: err instanceof Error ? err.message : "Match lookup failed",
-      });
+      const current = get().resultsBySelection[selectionId];
+      if (current) {
+        set((s) => ({
+          resultsBySelection: {
+            ...s.resultsBySelection,
+            [selectionId]: {
+              ...(s.resultsBySelection[selectionId] ?? emptyResult),
+              isSearching: false,
+              error: err instanceof Error ? err.message : "Match lookup failed",
+            },
+          },
+        }));
+      }
     }
   },
 
-  clearMatches: () => {
-    set({ matches: [], stats: null, error: null });
+  setCachedResults: (selectionId, matches, stats) => {
+    const prices = matches
+      .map((m) => m.item.unit_price)
+      .filter((p) => p > 0);
+    const computedStats: MatchStats = stats ?? {
+      count: prices.length,
+      avgPrice: prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : 0,
+      minPrice: prices.length ? Math.min(...prices) : 0,
+      maxPrice: prices.length ? Math.max(...prices) : 0,
+      priceRange: prices.length ? Math.max(...prices) - Math.min(...prices) : 0,
+      statusCounts: {},
+    };
+    set((s) => ({
+      resultsBySelection: {
+        ...s.resultsBySelection,
+        [selectionId]: {
+          matches,
+          stats: computedStats,
+          isSearching: false,
+          error: null,
+          groups: null,
+          isComposite: false,
+          parentDescription: null,
+        },
+      },
+    }));
+  },
+
+  clearSelection: (selectionId: string) => {
+    set((s) => {
+      const { [selectionId]: _, ...rest } = s.resultsBySelection;
+      return { resultsBySelection: rest };
+    });
+  },
+
+  clearAll: () => {
+    set({ resultsBySelection: {} });
   },
 }));
