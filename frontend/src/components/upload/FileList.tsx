@@ -115,9 +115,7 @@ function FileRow({ file, isSelected, onSelect, onDelete }: FileRowProps) {
   );
 
   return (
-    <motion.div
-      variants={itemVariants}
-      layout
+    <div
       onClick={() => onSelect(file.id)}
       className={`
         group flex items-center gap-2.5 px-3 py-2 rounded-md cursor-pointer
@@ -180,7 +178,7 @@ function FileRow({ file, isSelected, onSelect, onDelete }: FileRowProps) {
       >
         <Trash2 className="w-3.5 h-3.5" />
       </button>
-    </motion.div>
+    </div>
   );
 }
 
@@ -228,23 +226,16 @@ export default function FileList() {
   }
 
   return (
-    <motion.div
-      variants={listVariants}
-      initial="hidden"
-      animate="visible"
-      className="flex flex-col gap-1"
-    >
-      <AnimatePresence mode="popLayout">
-        {files.map((file) => (
-          <FileRow
-            key={file.id}
-            file={file}
-            isSelected={selectedFileId === file.id}
-            onSelect={handleSelect}
-            onDelete={handleDelete}
-          />
-        ))}
-      </AnimatePresence>
-    </motion.div>
+    <div className="flex flex-col gap-1">
+      {files.map((file) => (
+        <FileRow
+          key={file.id}
+          file={file}
+          isSelected={selectedFileId === file.id}
+          onSelect={handleSelect}
+          onDelete={handleDelete}
+        />
+      ))}
+    </div>
   );
 }

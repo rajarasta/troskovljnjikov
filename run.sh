@@ -55,28 +55,10 @@ kill_port() {
 kill_port "$FRONTEND_PORT"
 kill_port "$BACKEND_PORT"
 
-# ── 1. Start llama-server (if binary exists) ────────────────────────
+# ── 1. LLM server startup disabled (manual startup available) ────────
 
-if [[ -x "$LLAMA_BIN" && -f "$LLAMA_MODEL" ]]; then
-    log "${CYAN}Starting llama-server on port ${LLM_PORT}...${RESET}"
-    LD_LIBRARY_PATH="${SCRIPT_DIR}/bin:${LD_LIBRARY_PATH:-}" \
-        "$LLAMA_BIN" \
-        -m "$LLAMA_MODEL" \
-        -ngl 99 \
-        --parallel 4 \
-        --cont-batching \
-        --cache-reuse 512 \
-        --chat-template chatml \
-        --port "$LLM_PORT" \
-        > /dev/null 2>&1 &
-    PIDS+=($!)
-    log "${GREEN}llama-server started (PID ${PIDS[-1]})${RESET}"
-    sleep 2
-else
-    log "${RED}llama-server or model not found — skipping LLM server${RESET}"
-    log "${DIM}  Expected: ${LLAMA_BIN}${RESET}"
-    log "${DIM}  Model:    ${LLAMA_MODEL}${RESET}"
-fi
+log "${DIM}LLM server startup is disabled. Start manually if needed:${RESET}"
+log "${DIM}  LD_LIBRARY_PATH=./bin:${LD_LIBRARY_PATH:-} ./bin/llama-server -m ./models/ministral-3b.gguf --port ${LLM_PORT}${RESET}"
 
 # ── 2. Install/sync dependencies (skip with --skip-deps) ─────────────
 

@@ -1,22 +1,26 @@
 """
-Search Agent - PydanticAI agent for web price search on approved supplier domains.
+Search Agent — Deterministic pipeline + single LLM ranking call.
 
-Given a BoQ item description, searches pre-approved websites, extracts product prices,
-and returns structured quotes. The agent decides *what* to search and *which* results
-match; deterministic code handles parsing, normalization, and total computation.
+Applies the "spawner/despawner" pattern:
+1. Deterministic Python searches ALL approved domains in parallel
+2. Deterministic extractors pull prices from HTML (JSON-LD, meta, CSS)
+3. Deterministic RAG lookup finds historical prices
+4. Single LLM call ranks/scores candidates against the item description
+
+No tool calling, no multi-turn loops. Local model is sufficient for ranking.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote_plus
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai import Agent
 
 from app.config import settings
 from app.services.llm_settings import run_with_settings, get_model
@@ -29,7 +33,6 @@ from app.services.domain_registry import (
 )
 from app.services.price_extractor import (
     PriceField,
-    ProductMetadata,
     extract_prices,
     extract_product_links,
     extract_metadata,
@@ -48,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Structured output models
+# Structured output models (unchanged — same API contract)
 # ---------------------------------------------------------------------------
 
 class WebQuote(BaseModel):
@@ -72,44 +75,41 @@ class WebQuote(BaseModel):
 
     # Stock & Availability
     availability: str = Field(default="unknown", description="Availability status")
-    stock_status: str = Field(default="unknown", description="in_stock, low_stock, out_of_stock, discontinued")
-    stock_quantity: int | None = Field(default=None, description="Actual quantity in stock if available")
-    lead_time_days: int | None = Field(default=None, description="Estimated delivery time in days")
+    stock_status: str = Field(default="unknown")
+    stock_quantity: int | None = Field(default=None)
+    lead_time_days: int | None = Field(default=None)
 
     # Reviews & Ratings
-    rating: float | None = Field(default=None, description="Average rating (0-5 scale)")
-    review_count: int | None = Field(default=None, description="Number of customer reviews")
+    rating: float | None = Field(default=None)
+    review_count: int | None = Field(default=None)
 
     # Shipping
-    shipping_cost: float | None = Field(default=None, description="Shipping cost in currency")
-    free_shipping_threshold: float | None = Field(default=None, description="Order amount for free shipping")
-    shipping_policy: str = Field(default="unknown", description="free, paid, pickup_only")
+    shipping_cost: float | None = Field(default=None)
+    free_shipping_threshold: float | None = Field(default=None)
+    shipping_policy: str = Field(default="unknown")
 
     # Product Details
-    brand: str = Field(default="", description="Product brand/manufacturer")
-    sku: str = Field(default="", description="SKU/product code")
-    ean: str = Field(default="", description="EAN barcode")
-    specifications: dict[str, str] = Field(default_factory=dict, description="Product specs (material, dimensions, weight, etc)")
+    brand: str = Field(default="")
+    sku: str = Field(default="")
+    ean: str = Field(default="")
+    specifications: dict[str, str] = Field(default_factory=dict)
 
     # Volume/Bulk Pricing
-    volume_prices: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="Volume pricing: [{min_qty: 10, price: 8.50}, ...]"
-    )
+    volume_prices: list[dict[str, Any]] = Field(default_factory=list)
 
     # Metadata
-    evidence: dict[str, str] = Field(default_factory=dict, description="Evidence: raw_text, snippet, source_method")
-    scraped_at: str = Field(default="", description="ISO timestamp when scraped")
-    source_method: str = Field(default="unknown", description="jsonld, meta, css, llm")
+    evidence: dict[str, str] = Field(default_factory=dict)
+    scraped_at: str = Field(default="")
+    source_method: str = Field(default="unknown")
 
 
 class SearchResult(BaseModel):
     """Complete result of a web price search for a BoQ item."""
     quotes: list[WebQuote] = Field(default_factory=list)
     best_quote: WebQuote | None = None
-    computed: dict[str, Any] | None = Field(default=None, description="Computed total for best quote")
-    reasoning: str = Field(default="", description="Agent's reasoning about the search results")
-    search_log: list[str] = Field(default_factory=list, description="Step-by-step trace")
+    computed: dict[str, Any] | None = Field(default=None)
+    reasoning: str = Field(default="")
+    search_log: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -118,206 +118,166 @@ class SearchResult(BaseModel):
 
 @dataclass
 class SearchDeps:
-    """Dependencies passed to the search agent at runtime."""
+    """Dependencies passed to the search pipeline at runtime."""
     description: str
     unit: str = "kom"
     quantity: float | None = None
     file_id: str = ""
     pricing_rules: PricingRules = field(default_factory=PricingRules)
-    # Populated at runtime
-    _search_log: list[str] = field(default_factory=list)
-    _quotes: list[WebQuote] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
-# LLM model & agent
+# STEP 1: Build search queries (deterministic)
 # ---------------------------------------------------------------------------
 
-# Ensure ANTHROPIC_API_KEY is in environment before AnthropicModel tries to access it
-if settings.ANTHROPIC_API_KEY:
-    os.environ["ANTHROPIC_API_KEY"] = settings.ANTHROPIC_API_KEY
+# Boilerplate Croatian phrases to strip from search queries
+_BOILERPLATE_RE = re.compile(
+    r"(dobava\s+i\s+ugradnja|nabava\s+i\s+ugradnja|dobava\s+i\s+montaža|"
+    r"komplet\s+s\s+priborom|uključujući\s+sav\s+rad|prema\s+projektu|"
+    r"sve\s+komplet|sa\s+svim\s+radom)",
+    re.IGNORECASE,
+)
 
-_model = AnthropicModel(model_name=settings.CLAUDE_MODEL)
-
-SYSTEM_PROMPT = """\
-You are a Croatian construction materials price search specialist. Your task is to \
-find current prices for construction materials and services on approved supplier websites.
-
-You have access to these tools:
-- search_domain: Search a specific approved domain for products
-- fetch_and_extract: Fetch a product page and extract price information
-- rag_lookup: Look up historical prices from internal database
-
-Workflow:
-1. Analyze the item description to understand what product/material to search for
-2. Generate good search queries (Croatian construction terms)
-3. Search each approved domain using search_domain
-4. For promising candidates, use fetch_and_extract to get detailed pricing
-5. Compare results and reason about which quotes best match the target item
-
-Important:
-- Only search approved domains (bauhaus.hr, gradja.hr, wuerth, era-commerce.hr)
-- Report confidence honestly — don't guess if you can't find a match
-- Consider unit compatibility (m², kom, m, kg, etc.)
-- Croatian terminology: cijena = price, komad = piece, količina = quantity
-- PDV = VAT (25% in Croatia), most prices include PDV\
-"""
-
-# Don't create at module level - will be created dynamically with current model
-# search_agent = Agent(...)
-
-def _build_search_agent() -> Agent:
-    """Create search agent with the current dynamically selected model."""
-    current_model = get_model()
-    logger.debug(f"Building search_agent with model: {current_model}")
-    agent = Agent(
-        current_model,
-        output_type=SearchResult,
-        deps_type=SearchDeps,
-        system_prompt=SYSTEM_PROMPT,
-        retries=2,
-        model_settings={"temperature": 0.1},
-    )
-    return agent
+_ITEM_NUMBER_RE = re.compile(r"^\s*\d+[\.\)]\s*")
+_PARENS_RE = re.compile(r"\([^)]{30,}\)")  # Long parenthetical noise
 
 
-# Create agent template to register instructions and tools on
-search_agent = _build_search_agent()
+def _build_search_queries(description: str) -> list[str]:
+    """Generate 1-2 clean search queries from an item description."""
+    # Strip item numbers, boilerplate, long parenthetical details
+    q = _ITEM_NUMBER_RE.sub("", description)
+    q = _BOILERPLATE_RE.sub("", q)
+    q = _PARENS_RE.sub("", q)
+    q = re.sub(r"\s+", " ", q).strip()
 
+    if not q:
+        q = description[:60]
 
-@search_agent.instructions
-def build_search_context(ctx: RunContext[SearchDeps]) -> str:
-    """Build the dynamic prompt with item details and available domains."""
-    deps = ctx.deps
-    domains = get_all_domains()
-    domain_list = "\n".join(
-        f"  - {d.display_name} ({d.domain}) — search: {d.search_url_template is not None}"
-        for d in domains
-    )
-    lines = [
-        "TARGET ITEM TO SEARCH:",
-        f"  Description: {deps.description}",
-        f"  Unit: {deps.unit}",
-    ]
-    if deps.quantity is not None:
-        lines.append(f"  Quantity: {deps.quantity}")
-    lines.append(f"\nAPPROVED DOMAINS:\n{domain_list}")
-    lines.append(
-        "\nSearch for this item on the approved domains. "
-        "Use search_domain for each domain, then fetch_and_extract for promising results."
-    )
-    return "\n".join(lines)
+    queries = []
+
+    # Primary query: truncated to ~60 chars at word boundary
+    if len(q) > 60:
+        truncated = q[:60].rsplit(" ", 1)[0]
+        queries.append(truncated)
+    else:
+        queries.append(q)
+
+    # Secondary query: first 3-4 significant words (material focus)
+    words = [w for w in q.split() if len(w) > 2]
+    if len(words) > 4:
+        short = " ".join(words[:4])
+        if short != queries[0]:
+            queries.append(short)
+
+    return queries
 
 
 # ---------------------------------------------------------------------------
-# Agent tools
+# STEP 2: Search all domains (deterministic, parallel)
 # ---------------------------------------------------------------------------
 
-@search_agent.tool
-async def search_domain(
-    ctx: RunContext[SearchDeps],
+_FETCH_SEMAPHORE = asyncio.Semaphore(4)
+
+
+async def _search_one_domain(
+    domain_config: DomainConfig,
     query: str,
-    domain: str,
-) -> str:
-    """Search an approved domain for products matching the query.
-
-    Args:
-        query: Search query (product name, material description).
-        domain: The domain to search (e.g. "www.bauhaus.hr").
-
-    Returns:
-        JSON-formatted list of product candidates with URLs and titles.
-    """
-    import json
-
-    logger.info(f"🔍 [Tool] search_domain CALLED: domain={domain}, query={query[:50]}")
-    ctx.deps._search_log.append(f"Searching {domain} for: {query}")
-
-    search_url = get_search_url(domain, quote_plus(query))
-    logger.info(f"🔍 [Tool] search_domain got search_url: {search_url}")
+    search_log: list[str],
+) -> list[dict[str, str]]:
+    """Search a single domain, return candidate product links."""
+    search_url = get_search_url(domain_config.domain, quote_plus(query))
     if not search_url:
-        result = json.dumps({"error": f"No search URL template for {domain}", "candidates": []})
-        logger.warning(f"🔍 [Tool] search_domain returning error: {result}")
-        return result
+        return []
 
     try:
-        result = await fetch_page(search_url)
+        async with _FETCH_SEMAPHORE:
+            result = await fetch_page(search_url)
         if result.status_code != 200:
-            return json.dumps({"error": f"HTTP {result.status_code}", "candidates": []})
+            search_log.append(f"{domain_config.display_name}: HTTP {result.status_code}")
+            return []
 
-        links = extract_product_links(result.html, base_url=f"https://{domain}")
+        links = extract_product_links(result.html, base_url=f"https://{domain_config.domain}")
+        search_log.append(f"{domain_config.display_name}: {len(links)} product links for '{query[:40]}'")
 
-        # Also try to extract prices directly from the listing page
-        listing_prices = extract_prices(result.html)
-
-        candidates = []
-        for link in links[:8]:  # Cap at 8 candidates per domain
-            candidates.append({
-                "url": link["url"],
-                "title": link["title"],
-            })
-
-        ctx.deps._search_log.append(f"Found {len(candidates)} candidates on {domain}")
-
-        return json.dumps({
-            "domain": domain,
-            "search_url": search_url,
-            "candidates": candidates,
-            "listing_prices_count": len(listing_prices),
-        })
+        # Return top 3 per domain
+        return [
+            {"url": link["url"], "title": link["title"], "domain": domain_config.domain}
+            for link in links[:3]
+        ]
     except Exception as exc:
-        ctx.deps._search_log.append(f"Error searching {domain}: {exc}")
-        return json.dumps({"error": str(exc), "candidates": []})
+        search_log.append(f"{domain_config.display_name}: error — {exc}")
+        return []
 
 
-@search_agent.tool
-async def fetch_and_extract(
-    ctx: RunContext[SearchDeps],
-    url: str,
-    product_hint: str = "",
-) -> str:
-    """Fetch a product page and extract price information.
+async def _search_all_domains(
+    queries: list[str],
+    search_log: list[str],
+) -> list[dict[str, str]]:
+    """Search all approved domains in parallel, return deduplicated candidate links."""
+    domains = get_all_domains()
+    tasks = [
+        _search_one_domain(domain, query, search_log)
+        for domain in domains
+        for query in queries
+    ]
 
-    Args:
-        url: The product page URL to fetch (must be on an approved domain).
-        product_hint: Optional hint about what product to look for on the page.
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    Returns:
-        JSON with extracted prices, product name, availability.
-    """
-    import json
+    # Flatten and deduplicate by URL
+    seen_urls: set[str] = set()
+    candidates: list[dict[str, str]] = []
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+        for link in result:
+            if link["url"] not in seen_urls:
+                seen_urls.add(link["url"])
+                candidates.append(link)
 
-    logger.info(f"🔍 [Tool] fetch_and_extract CALLED: url={url[:80]}")
+    search_log.append(f"Total unique candidates: {len(candidates)}")
+    return candidates[:12]  # Cap at 12
+
+
+# ---------------------------------------------------------------------------
+# STEP 3: Fetch candidates and extract prices (deterministic, parallel)
+# ---------------------------------------------------------------------------
+
+async def _fetch_one_candidate(
+    link: dict[str, str],
+    search_log: list[str],
+) -> list[WebQuote]:
+    """Fetch a candidate page and extract prices."""
+    url = link["url"]
+    domain = link.get("domain", "")
+
     if not is_approved(url):
-        return json.dumps({"error": f"URL not on approved domain: {url}"})
-
-    ctx.deps._search_log.append(f"Fetching: {url}")
+        return []
 
     try:
-        result = await fetch_page(url)
+        async with _FETCH_SEMAPHORE:
+            result = await fetch_page(url)
         if result.status_code != 200:
-            return json.dumps({"error": f"HTTP {result.status_code}"})
+            return []
 
-        prices = extract_prices(result.html, product_hint)
-
+        prices = extract_prices(result.html)
         if not prices:
-            ctx.deps._search_log.append(f"No prices found on {url}")
-            return json.dumps({"url": url, "prices": [], "text_snippet": result.text[:500]})
+            return []
 
-        # Extract rich metadata (images, ratings, stock, shipping, etc.)
         metadata = extract_metadata(result.html)
-
-        # Normalize prices
         config = get_domain_config(url)
         vendor = config.display_name if config else "Unknown"
 
-        price_data = []
-        for pf in prices[:5]:  # Cap at 5 prices per page
-            nq = normalize_price(pf, vendor=vendor, domain_vat_included=config.vat_included if config else True)
+        quotes: list[WebQuote] = []
+        for pf in prices[:3]:  # Top 3 prices per page
+            nq = normalize_price(
+                pf,
+                vendor=vendor,
+                domain_vat_included=config.vat_included if config else True,
+            )
             quote = WebQuote(
                 vendor=vendor,
                 url=url,
-                product_name=nq.product_name or product_hint,
+                product_name=nq.product_name or link.get("title", ""),
                 unit_price=nq.unit_price,
                 currency=nq.currency,
                 unit=nq.unit,
@@ -328,7 +288,6 @@ async def fetch_and_extract(
                 confidence=nq.confidence,
                 evidence={"raw_text": nq.evidence_snippet, "source_method": nq.source_method},
                 image_url=nq.image_url,
-                # Rich metadata fields
                 image_urls=metadata.images,
                 rating=metadata.rating,
                 review_count=metadata.review_count,
@@ -340,74 +299,264 @@ async def fetch_and_extract(
                 sku=metadata.sku,
                 ean=metadata.ean,
                 specifications=metadata.specifications,
+                source_method=nq.source_method,
             )
-            ctx.deps._quotes.append(quote)
-            price_data.append({
-                "product_name": nq.product_name,
-                "unit_price": nq.unit_price,
-                "currency": nq.currency,
-                "unit": nq.unit,
-                "vat_included": nq.vat_included,
-                "availability": nq.availability,
-                "confidence": nq.confidence,
-                "source_method": nq.source_method,
-            })
+            quotes.append(quote)
 
-        ctx.deps._search_log.append(f"Extracted {len(price_data)} prices from {url}")
+        search_log.append(f"Extracted {len(quotes)} prices from {vendor} ({url[:60]})")
+        return quotes
 
-        return json.dumps({
-            "url": url,
-            "vendor": vendor,
-            "prices": price_data,
-        })
     except Exception as exc:
-        ctx.deps._search_log.append(f"Error fetching {url}: {exc}")
-        return json.dumps({"error": str(exc)})
+        search_log.append(f"Fetch error {url[:60]}: {exc}")
+        return []
 
 
-@search_agent.tool
-async def rag_lookup(
-    ctx: RunContext[SearchDeps],
-    query: str,
-) -> str:
-    """Look up historical prices from the internal BoQ database.
+async def _fetch_all_candidates(
+    links: list[dict[str, str]],
+    search_log: list[str],
+) -> list[WebQuote]:
+    """Fetch all candidate pages in parallel, extract prices."""
+    tasks = [_fetch_one_candidate(link, search_log) for link in links]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    Args:
-        query: Search query for historical items.
+    all_quotes: list[WebQuote] = []
+    for result in results:
+        if isinstance(result, Exception):
+            continue
+        all_quotes.extend(result)
 
-    Returns:
-        JSON with matching historical items and their prices.
-    """
-    import json
-
-    logger.debug(f"🔍 [Tool] rag_lookup called: query={query[:50]}")
-    ctx.deps._search_log.append(f"RAG lookup: {query}")
-
-    try:
-        hits = rag_search(
-            query_text=query,
-            top_k=5,
-            file_id_exclude=ctx.deps.file_id or None,
-        )
-
-        results = []
-        for h in hits:
-            if h["similarity"] >= settings.MATCH_THRESHOLD:
-                results.append({
-                    "id": h["id"],
-                    "similarity": h["similarity"],
-                    "unit_price": h["metadata"].get("unit_price", 0),
-                    "unit": h["metadata"].get("unit", ""),
-                    "file_id": h["metadata"].get("file_id", ""),
-                })
-
-        return json.dumps({"matches": results, "count": len(results)})
-    except Exception as exc:
-        return json.dumps({"error": str(exc), "matches": []})
+    search_log.append(f"Total web quotes: {len(all_quotes)}")
+    return all_quotes
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# STEP 4: RAG lookup (deterministic)
+# ---------------------------------------------------------------------------
+
+def _rag_lookup(description: str, file_id: str) -> list[dict[str, Any]]:
+    """Search historical prices from ChromaDB. Returns filtered matches."""
+    try:
+        hits = rag_search(
+            query_text=description,
+            top_k=5,
+            file_id_exclude=file_id or None,
+        )
+        return [
+            {
+                "id": h["id"],
+                "similarity": h["similarity"],
+                "unit_price": h["metadata"].get("unit_price", 0),
+                "unit": h["metadata"].get("unit", ""),
+                "file_id": h["metadata"].get("file_id", ""),
+            }
+            for h in hits
+            if h["similarity"] >= 0.3 and (h["metadata"].get("unit_price") or 0) > 0
+        ]
+    except Exception as exc:
+        logger.warning("RAG lookup failed: %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# STEP 5: LLM ranking (single call, local model, no tools)
+# ---------------------------------------------------------------------------
+
+_RANKING_SYSTEM_PROMPT = (
+    "You are a Croatian construction materials pricing specialist. "
+    "You rank product candidates by how well they match a target BOQ item description. "
+    "Consider: product name similarity, unit compatibility, price plausibility, "
+    "and extraction confidence. Croatian terms: cijena=price, komad=piece, "
+    "PDV=VAT (25%). Respond ONLY with valid JSON."
+)
+
+# PydanticAI agent for ranking — no tools, simple prompt-in prompt-out
+_ranking_agent = Agent(
+    get_model(),
+    system_prompt=_RANKING_SYSTEM_PROMPT,
+    retries=1,
+    model_settings={"temperature": 0.1},
+)
+
+
+def _build_ranking_prompt(
+    description: str,
+    unit: str,
+    web_quotes: list[WebQuote],
+    rag_matches: list[dict[str, Any]],
+) -> str:
+    """Build the ranking prompt for the LLM."""
+    lines = [
+        f'Target item: "{description}" (unit: {unit})',
+        "",
+    ]
+
+    if web_quotes:
+        lines.append("Web candidates:")
+        for i, q in enumerate(web_quotes, 1):
+            lines.append(
+                f"  {i}. [{q.vendor}] \"{q.product_name}\" — "
+                f"€{q.unit_price:.2f}/{q.unit} — "
+                f"{q.availability} — {q.source_method} conf={q.confidence:.1f}"
+            )
+        lines.append("")
+
+    if rag_matches:
+        lines.append("Historical matches:")
+        for i, m in enumerate(rag_matches):
+            lines.append(
+                f"  {chr(65+i)}. similarity={m['similarity']:.2f} — "
+                f"€{m['unit_price']:.2f}/{m['unit']} — file: {m['file_id']}"
+            )
+        lines.append("")
+
+    if not web_quotes and not rag_matches:
+        lines.append("No candidates found.")
+        lines.append("")
+
+    lines.append(
+        "Return JSON: {\"rankings\": [{\"index\": 1, \"confidence\": 0.85, \"reason\": \"...\"}], "
+        "\"best_index\": 1, \"reasoning\": \"brief overall summary\"}"
+    )
+    lines.append(
+        "Index numbers refer to web candidates (1-based). "
+        "Confidence 0-1 reflects match quality to the target item. "
+        "If no candidate is a good match, set best_index to null."
+    )
+
+    return "\n".join(lines)
+
+
+def _try_parse_json(text: str) -> dict | None:
+    """Try multiple strategies to extract valid JSON from LLM output."""
+    # Strategy 1: find outermost { ... } and parse directly
+    json_match = re.search(r"\{[\s\S]*\}", text)
+    if not json_match:
+        return None
+
+    raw = json_match.group()
+
+    # Strategy 2: strip control characters and try
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", raw)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 3: fix unescaped quotes inside string values
+    # Replace internal double-quotes with single quotes (crude but effective)
+    try:
+        # Remove trailing commas before } or ]
+        fixed = re.sub(r",\s*([}\]])", r"\1", cleaned)
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 4: extract just the rankings array and best_index with regex
+    try:
+        data: dict[str, Any] = {}
+        # Pull best_index
+        bi_match = re.search(r'"best_index"\s*:\s*(\d+|null)', cleaned)
+        if bi_match:
+            val = bi_match.group(1)
+            data["best_index"] = None if val == "null" else int(val)
+
+        # Pull individual ranking objects: {"index": N, "confidence": F, ...}
+        ranking_items = re.findall(
+            r'\{\s*"index"\s*:\s*(\d+)\s*,\s*"confidence"\s*:\s*([\d.]+)',
+            cleaned,
+        )
+        if ranking_items:
+            data["rankings"] = [
+                {"index": int(idx), "confidence": float(conf)}
+                for idx, conf in ranking_items
+            ]
+            return data
+
+        # Pull reasoning
+        reason_match = re.search(r'"reasoning"\s*:\s*"([^"]*)"', cleaned)
+        if reason_match:
+            data["reasoning"] = reason_match.group(1)
+
+        if data:
+            return data
+    except (ValueError, TypeError):
+        pass
+
+    return None
+
+
+def _parse_ranking_response(
+    text: str,
+    web_quotes: list[WebQuote],
+) -> tuple[list[WebQuote], str]:
+    """Parse the LLM ranking response. Returns (ranked_quotes, reasoning)."""
+    data = _try_parse_json(text)
+
+    if data is None:
+        logger.warning("Could not extract JSON from LLM response, using deterministic fallback")
+        return _deterministic_rank(web_quotes), "LLM response unparseable, used deterministic ranking"
+
+    reasoning = data.get("reasoning", "")
+    best_index = data.get("best_index")
+    rankings = data.get("rankings", [])
+
+    # Apply LLM confidence scores to quotes
+    applied = 0
+    for ranking in rankings:
+        idx = ranking.get("index")
+        conf = ranking.get("confidence", 0)
+        if isinstance(idx, int) and 1 <= idx <= len(web_quotes):
+            web_quotes[idx - 1].confidence = float(conf)
+            applied += 1
+
+    if applied == 0:
+        # LLM returned JSON but no usable rankings
+        logger.warning("LLM returned JSON but no valid rankings, using deterministic fallback")
+        return _deterministic_rank(web_quotes), reasoning or "No valid rankings in LLM response"
+
+    # Sort by confidence descending
+    web_quotes.sort(key=lambda q: q.confidence, reverse=True)
+
+    return web_quotes, reasoning
+
+
+async def _rank_candidates(
+    description: str,
+    unit: str,
+    web_quotes: list[WebQuote],
+    rag_matches: list[dict[str, Any]],
+    search_log: list[str],
+) -> tuple[list[WebQuote], str]:
+    """Single LLM call to rank candidates. Falls back to deterministic ranking on failure."""
+    if not web_quotes:
+        return web_quotes, "No web candidates to rank"
+
+    prompt = _build_ranking_prompt(description, unit, web_quotes, rag_matches)
+
+    try:
+        result = await run_with_settings("search", _ranking_agent, prompt)
+        ranked, reasoning = _parse_ranking_response(result.output, web_quotes)
+        search_log.append(f"LLM ranked {len(ranked)} candidates")
+        return ranked, reasoning
+    except Exception as exc:
+        logger.warning("LLM ranking failed, using deterministic fallback: %s", exc)
+        search_log.append(f"LLM ranking failed ({exc}), using deterministic fallback")
+        return _deterministic_rank(web_quotes), f"Deterministic ranking (LLM unavailable: {exc})"
+
+
+def _deterministic_rank(quotes: list[WebQuote]) -> list[WebQuote]:
+    """Fallback: rank by extraction confidence, penalize for no LLM verification."""
+    # Prefer jsonld/meta over css
+    method_score = {"jsonld": 0.9, "meta": 0.8, "css": 0.6, "unknown": 0.4}
+    for q in quotes:
+        base = method_score.get(q.source_method, 0.4)
+        q.confidence = round(base * 0.7, 2)  # Penalty for no LLM verification
+    quotes.sort(key=lambda q: q.confidence, reverse=True)
+    return quotes
+
+
+# ---------------------------------------------------------------------------
+# Public API (unchanged signature)
 # ---------------------------------------------------------------------------
 
 async def run_price_search(
@@ -417,7 +566,7 @@ async def run_price_search(
     file_id: str = "",
     pricing_rules: PricingRules | None = None,
 ) -> SearchResult:
-    """Run the price search agent for a BoQ item.
+    """Run the deterministic price search pipeline for a BoQ item.
 
     Parameters
     ----------
@@ -437,60 +586,45 @@ async def run_price_search(
     SearchResult
         Structured result with quotes, best quote, computed total, and reasoning.
     """
-    logger.info(f"🔍 Starting price search for: {description[:100]}")
-    current_model = get_model()
-    logger.info(f"🔍 Current model: {current_model}")
-
+    logger.info("Starting price search for: %s", description[:100])
     rules = pricing_rules or PricingRules()
-    deps = SearchDeps(
-        description=description,
-        unit=unit,
-        quantity=quantity,
-        file_id=file_id,
-        pricing_rules=rules,
+    search_log: list[str] = []
+
+    # STEP 1: Build search queries
+    queries = _build_search_queries(description)
+    search_log.append(f"Queries: {queries}")
+
+    # STEP 2: Search all domains in parallel
+    candidate_links = await _search_all_domains(queries, search_log)
+
+    # STEP 3: Fetch candidates and extract prices (parallel)
+    web_quotes = await _fetch_all_candidates(candidate_links, search_log)
+
+    # STEP 4: RAG lookup (deterministic)
+    rag_matches = _rag_lookup(description, file_id)
+    search_log.append(f"RAG matches: {len(rag_matches)}")
+
+    # STEP 5: LLM ranking (single call)
+    ranked_quotes, reasoning = await _rank_candidates(
+        description, unit, web_quotes, rag_matches, search_log,
     )
 
-    # IMPORTANT: Rebuild the agent with the current model to ensure dynamic model switching
-    current_agent = _build_search_agent()
-    logger.info(f"🔍 Created search_agent with model: {current_agent.model}")
-
-    result = await run_with_settings(
-        "search",
-        current_agent,
-        "Search for the target item on approved supplier domains. "
-        "Find the best price matches, extract pricing data, and compare with historical data. "
-        "Return your findings with confidence scores and reasoning.",
-        deps=deps,
-    )
-
-    output = result.output
-    logger.info(f"🔍 Search agent returned: quotes={len(output.quotes)}, search_log_entries={len(output.search_log)}")
-    logger.info(f"🔍 Search log: {output.search_log}")
-
-    # Merge tool-collected quotes into the result
-    if deps._quotes and not output.quotes:
-        output.quotes = deps._quotes
-
-    # Merge search log
-    if deps._search_log:
-        output.search_log = deps._search_log + output.search_log
-
-    # Pick best quote if agent didn't
-    if output.quotes and output.best_quote is None:
-        output.best_quote = max(output.quotes, key=lambda q: q.confidence)
+    # STEP 6: Finalize
+    best_quote = ranked_quotes[0] if ranked_quotes else None
 
     # Compute total for best quote (deterministic)
-    if output.best_quote and quantity:
+    computed = None
+    if best_quote and quantity:
         nq = NormalizedQuote(
-            unit_price=output.best_quote.unit_price,
-            currency=output.best_quote.currency,
-            unit=output.best_quote.unit,
-            pack_size=output.best_quote.pack_size,
-            vat_included=output.best_quote.vat_included,
-            vendor=output.best_quote.vendor,
+            unit_price=best_quote.unit_price,
+            currency=best_quote.currency,
+            unit=best_quote.unit,
+            pack_size=best_quote.pack_size,
+            vat_included=best_quote.vat_included,
+            vendor=best_quote.vendor,
         )
         ct = compute_total(nq, quantity, rules)
-        output.computed = {
+        computed = {
             "quantity": ct.quantity,
             "unit_price_ex_vat": ct.unit_price_ex_vat,
             "subtotal_ex_vat": ct.subtotal_ex_vat,
@@ -501,4 +635,17 @@ async def run_price_search(
             "notes": ct.notes,
         }
 
-    return output
+    result = SearchResult(
+        quotes=ranked_quotes,
+        best_quote=best_quote,
+        computed=computed,
+        reasoning=reasoning,
+        search_log=search_log,
+    )
+
+    logger.info(
+        "Search complete: %d quotes, best=%s",
+        len(ranked_quotes),
+        best_quote.product_name[:50] if best_quote else "none",
+    )
+    return result

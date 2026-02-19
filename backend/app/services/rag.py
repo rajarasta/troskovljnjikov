@@ -9,8 +9,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import os
 import chromadb
 from chromadb.utils import embedding_functions
+
+# Use cached model without checking HuggingFace online
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 logger = logging.getLogger(__name__)
 

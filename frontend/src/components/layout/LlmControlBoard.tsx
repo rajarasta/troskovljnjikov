@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { RotateCcw, ChevronDown, ChevronRight } from "lucide-react";
+import { RotateCcw, ChevronDown, ChevronRight, Radar, Trash2, Plus } from "lucide-react";
 import { useLlmSettingsStore } from "@/stores/llmSettingsStore";
+import DomainsSection from "@/components/layout/DomainsSection";
 
 const CATEGORIES = [
   { key: "chat", label: "Chat" },
@@ -16,11 +17,14 @@ export default function LlmControlBoard() {
   const activeAgentIds = useLlmSettingsStore((s) => s.activeAgentIds);
   const { availableModels, currentModel, modelsLoading, modelsError, fetchModels, setModel } =
     useLlmSettingsStore();
+  const { endpoints, endpointsLoading, scanLoading, fetchEndpoints, scanEndpoints } =
+    useLlmSettingsStore();
 
   useEffect(() => {
     if (!isLoaded) fetchAll();
     fetchModels();
-  }, [isLoaded, fetchAll, fetchModels]);
+    fetchEndpoints();
+  }, [isLoaded, fetchAll, fetchModels, fetchEndpoints]);
 
   if (!isLoaded) {
     return <div className="text-xs text-text-muted p-2">Loading LLM settings...</div>;
@@ -30,6 +34,17 @@ export default function LlmControlBoard() {
 
   return (
     <div className="space-y-1 max-h-[70vh] overflow-y-auto">
+      {/* Search Domains section */}
+      <DomainsSection />
+
+      {/* LLM Endpoints section */}
+      <EndpointsSection
+        endpoints={endpoints}
+        endpointsLoading={endpointsLoading}
+        scanLoading={scanLoading}
+        onScan={scanEndpoints}
+      />
+
       {/* Global model selector */}
       <div className="border border-border-default rounded-md overflow-hidden mb-1">
         <div className="px-2 py-1.5 bg-bg-tertiary">
@@ -78,6 +93,119 @@ export default function LlmControlBoard() {
           />
         );
       })}
+    </div>
+  );
+}
+
+function EndpointsSection({
+  endpoints,
+  endpointsLoading,
+  scanLoading,
+  onScan,
+}: {
+  endpoints: Array<{ url: string; status: string; is_active: boolean; models: string[] }>;
+  endpointsLoading: boolean;
+  scanLoading: boolean;
+  onScan: () => Promise<void>;
+}) {
+  const { removeEndpoint, setActiveEndpoint, addEndpoint } = useLlmSettingsStore();
+  const [newUrl, setNewUrl] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const handleAddEndpoint = async () => {
+    if (!newUrl.trim()) return;
+    try {
+      setAdding(true);
+      await addEndpoint(newUrl.trim());
+      setNewUrl("");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return (
+    <div className="border border-border-default rounded-md overflow-hidden mb-1">
+      <div className="px-2 py-1.5 bg-bg-tertiary flex items-center justify-between">
+        <span className="text-xs font-medium text-text-secondary">LLM Endpoints</span>
+        <button
+          onClick={onScan}
+          disabled={scanLoading}
+          className="text-[10px] px-2 py-1 bg-accent-cyan/20 text-accent-cyan rounded hover:bg-accent-cyan/30 disabled:opacity-50 flex items-center gap-1"
+          title="Scan for LLM endpoints on common ports"
+        >
+          <Radar className="w-3 h-3" />
+          {scanLoading ? "Scanning..." : "Scan"}
+        </button>
+      </div>
+
+      <div className="px-2 py-2 space-y-2">
+        {endpointsLoading ? (
+          <span className="text-[10px] text-text-muted">Loading endpoints...</span>
+        ) : endpoints.length === 0 ? (
+          <span className="text-[10px] text-text-muted">No endpoints registered. Click Scan to discover.</span>
+        ) : (
+          <div className="space-y-1">
+            {endpoints.map((ep) => (
+              <div key={ep.url} className="flex items-center gap-2 text-[10px] p-1 rounded bg-bg-hover">
+                {/* Status indicator */}
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    ep.status === "online"
+                      ? "bg-accent-green"
+                      : ep.status === "offline"
+                        ? "bg-accent-amber"
+                        : "bg-text-muted"
+                  }`}
+                  title={ep.status}
+                />
+                {/* URL */}
+                <span className="flex-1 font-mono text-text-secondary truncate">{ep.url}</span>
+                {/* Active button */}
+                <button
+                  onClick={() => setActiveEndpoint(ep.url)}
+                  className={`px-1.5 py-0.5 rounded transition-colors text-[9px] font-medium ${
+                    ep.is_active
+                      ? "bg-accent-cyan text-white"
+                      : "bg-border-default text-text-muted hover:bg-border-default/80"
+                  }`}
+                >
+                  {ep.is_active ? "●" : "○"} Set
+                </button>
+                {/* Remove button */}
+                <button
+                  onClick={() => removeEndpoint(ep.url)}
+                  className="text-accent-amber hover:text-accent-amber/80 p-0.5"
+                  title="Remove endpoint"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add custom endpoint */}
+        <div className="flex gap-1 pt-1 border-t border-border-default">
+          <input
+            type="text"
+            placeholder="http://localhost:8080/v1"
+            value={newUrl}
+            onChange={(e) => setNewUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleAddEndpoint();
+            }}
+            className="flex-1 text-[10px] bg-bg-primary border border-border-default rounded px-1.5 py-1 text-text-secondary placeholder:text-text-muted focus:outline-none focus:border-accent-cyan/50"
+          />
+          <button
+            onClick={handleAddEndpoint}
+            disabled={adding || !newUrl.trim()}
+            className="px-2 py-1 bg-accent-cyan/20 text-accent-cyan text-[10px] rounded hover:bg-accent-cyan/30 disabled:opacity-50 flex items-center gap-1"
+          >
+            <Plus className="w-3 h-3" />
+            Add
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

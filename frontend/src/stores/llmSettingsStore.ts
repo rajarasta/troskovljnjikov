@@ -1,11 +1,16 @@
 import { create } from "zustand";
-import type { AgentSettings, AllAgentSettings } from "@/lib/api/llmSettings";
+import type { AgentSettings, AllAgentSettings, EndpointInfo } from "@/lib/api/llmSettings";
 import {
   fetchLlmSettings,
   updateLlmSettings,
   resetLlmSettings,
   fetchAvailableModels,
   setCurrentModel,
+  fetchEndpoints,
+  scanEndpoints,
+  addEndpoint as apiAddEndpoint,
+  removeEndpoint as apiRemoveEndpoint,
+  setActiveEndpoint as apiSetActiveEndpoint,
 } from "@/lib/api/llmSettings";
 
 interface LlmSettingsState {
@@ -20,6 +25,11 @@ interface LlmSettingsState {
   modelsLoading: boolean;
   modelsError: boolean;
 
+  // LLM Endpoints
+  endpoints: EndpointInfo[];
+  endpointsLoading: boolean;
+  scanLoading: boolean;
+
   fetchAll: () => Promise<void>;
   fetchModels: () => Promise<void>;
   setModel: (modelName: string) => Promise<void>;
@@ -32,6 +42,13 @@ interface LlmSettingsState {
   resetAgent: (agentId: string) => Promise<void>;
   setAgentActive: (agentId: string) => void;
   setAgentInactive: (agentId: string) => void;
+
+  // Endpoint management
+  fetchEndpoints: () => Promise<void>;
+  scanEndpoints: () => Promise<void>;
+  addEndpoint: (url: string) => Promise<void>;
+  removeEndpoint: (url: string) => Promise<void>;
+  setActiveEndpoint: (url: string) => Promise<void>;
 }
 
 export const useLlmSettingsStore = create<LlmSettingsState>((set, get) => ({
@@ -44,6 +61,10 @@ export const useLlmSettingsStore = create<LlmSettingsState>((set, get) => ({
   currentModel: "",
   modelsLoading: false,
   modelsError: false,
+
+  endpoints: [],
+  endpointsLoading: false,
+  scanLoading: false,
 
   fetchAll: async () => {
     if (get().isLoading) return;
@@ -116,5 +137,63 @@ export const useLlmSettingsStore = create<LlmSettingsState>((set, get) => ({
       next.delete(agentId);
       return { activeAgentIds: next };
     });
+  },
+
+  // Endpoint management methods
+  fetchEndpoints: async () => {
+    set({ endpointsLoading: true });
+    try {
+      const { endpoints } = await fetchEndpoints();
+      set({ endpoints, endpointsLoading: false });
+    } catch (err) {
+      console.error("[llmSettingsStore] Failed to fetch endpoints:", err);
+      set({ endpointsLoading: false });
+    }
+  },
+
+  scanEndpoints: async () => {
+    set({ scanLoading: true });
+    try {
+      const { endpoints } = await scanEndpoints();
+      set({ endpoints, scanLoading: false });
+    } catch (err) {
+      console.error("[llmSettingsStore] Failed to scan endpoints:", err);
+      set({ scanLoading: false });
+    }
+  },
+
+  addEndpoint: async (url) => {
+    try {
+      const { endpoints } = await apiAddEndpoint(url);
+      set({ endpoints });
+    } catch (err) {
+      console.error("[llmSettingsStore] Failed to add endpoint:", err);
+    }
+  },
+
+  removeEndpoint: async (url) => {
+    try {
+      const { endpoints } = await apiRemoveEndpoint(url);
+      set({ endpoints });
+    } catch (err) {
+      console.error("[llmSettingsStore] Failed to remove endpoint:", err);
+    }
+  },
+
+  setActiveEndpoint: async (url) => {
+    try {
+      await apiSetActiveEndpoint(url);
+      // Update local state: mark this endpoint as active
+      set((s) => ({
+        endpoints: s.endpoints.map((ep) => ({
+          ...ep,
+          is_active: ep.url === url,
+        })),
+      }));
+      // Refresh models
+      await get().fetchModels();
+    } catch (err) {
+      console.error("[llmSettingsStore] Failed to set active endpoint:", err);
+    }
   },
 }));

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X,
@@ -20,8 +20,10 @@ import {
 import { useBoQStore } from "@/stores/boqStore";
 import { useSearchStore } from "@/stores/searchStore";
 import { useSelectionStore } from "@/stores/selectionStore";
+import { useDomainStore } from "@/stores/domainStore";
 import { triggerPriceSearch, triggerBatchPriceSearch } from "@/lib/api";
 import type { WebQuote } from "@/lib/types";
+import type { DomainInfo } from "@/lib/api/domains";
 
 // ── Animation variants ──────────────────────────────────────────────
 
@@ -104,15 +106,6 @@ const PIPELINE_STEPS = [
     bg: "bg-accent-cyan/10",
     border: "border-accent-cyan/20",
   },
-] as const;
-
-// ── Domain config ───────────────────────────────────────────────────
-
-const DOMAINS = [
-  { key: "bauhaus", label: "Bauhaus", domain: "bauhaus.hr", initial: "B" },
-  { key: "gradja", label: "Gradja.hr", domain: "gradja.hr", initial: "G" },
-  { key: "wuerth", label: "Würth", domain: "wuerth.com.hr", initial: "W" },
-  { key: "era", label: "ERA Commerce", domain: "era-commerce.hr", initial: "E" },
 ] as const;
 
 // ── Pipeline flow connector ─────────────────────────────────────────
@@ -233,19 +226,19 @@ function StepNode({
 
 function DomainChip({
   domain,
-  enabled,
   onToggle,
 }: {
-  domain: (typeof DOMAINS)[number];
-  enabled: boolean;
+  domain: DomainInfo;
   onToggle: () => void;
 }) {
+  const initial = domain.display_name.charAt(0).toUpperCase();
+
   return (
     <button
       onClick={onToggle}
       className={`
         group flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all duration-200
-        ${enabled
+        ${domain.enabled
           ? "bg-white border-border-default hover:border-accent-cyan/30 shadow-sm"
           : "bg-bg-tertiary/40 border-transparent hover:border-border-default opacity-60"
         }
@@ -256,24 +249,24 @@ function DomainChip({
         className={`
           w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold
           transition-all duration-200
-          ${enabled
+          ${domain.enabled
             ? "bg-accent-purple/10 text-accent-purple"
             : "bg-bg-tertiary text-text-muted"
           }
         `}
       >
-        {domain.initial}
+        {initial}
       </div>
 
-      <div className="flex flex-col items-start">
+      <div className="flex flex-col items-start min-w-0">
         <span
           className={`text-[11px] font-medium leading-tight transition-colors ${
-            enabled ? "text-text-primary" : "text-text-muted"
+            domain.enabled ? "text-text-primary" : "text-text-muted"
           }`}
         >
-          {domain.label}
+          {domain.display_name}
         </span>
-        <span className="text-[9px] text-text-muted leading-tight font-mono">
+        <span className="text-[9px] text-text-muted leading-tight font-mono truncate">
           {domain.domain}
         </span>
       </div>
@@ -282,15 +275,15 @@ function DomainChip({
       <div
         className={`
           ml-auto w-7 h-4 rounded-full relative transition-colors duration-200 shrink-0
-          ${enabled ? "bg-accent-emerald/25" : "bg-bg-tertiary"}
+          ${domain.enabled ? "bg-accent-emerald/25" : "bg-bg-tertiary"}
         `}
       >
         <motion.div
           className={`
             absolute top-0.5 w-3 h-3 rounded-full transition-colors duration-200
-            ${enabled ? "bg-accent-emerald" : "bg-text-muted/40"}
+            ${domain.enabled ? "bg-accent-emerald" : "bg-text-muted/40"}
           `}
-          animate={{ left: enabled ? 14 : 2 }}
+          animate={{ left: domain.enabled ? 14 : 2 }}
           transition={{ type: "spring", stiffness: 500, damping: 30 }}
         />
       </div>
@@ -381,13 +374,12 @@ interface PriceSearchModalProps {
 }
 
 export default function PriceSearchModal({ isOpen, onClose }: PriceSearchModalProps) {
-  // Domain toggles
-  const [enabledDomains, setEnabledDomains] = useState<Record<string, boolean>>({
-    bauhaus: true,
-    gradja: true,
-    wuerth: true,
-    era: true,
-  });
+  // Domain state from DB
+  const { domains, isLoaded: domainsLoaded, fetchAll: fetchDomains, toggleEnabled } = useDomainStore();
+
+  useEffect(() => {
+    if (!domainsLoaded) fetchDomains();
+  }, [domainsLoaded, fetchDomains]);
 
   // Options
   const [includeVat, setIncludeVat] = useState(true);
@@ -437,10 +429,6 @@ export default function PriceSearchModal({ isOpen, onClose }: PriceSearchModalPr
     }
     return quotes;
   }, [selectedItems, searchQuotes]);
-
-  const handleToggleDomain = useCallback((key: string) => {
-    setEnabledDomains((prev) => ({ ...prev, [key]: !prev[key] }));
-  }, []);
 
   const handleLaunch = useCallback(async () => {
     if (!hasSelection) return;
@@ -590,15 +578,17 @@ export default function PriceSearchModal({ isOpen, onClose }: PriceSearchModalPr
                   <span className="text-[10px] text-text-muted uppercase tracking-widest">
                     Approved Sources
                   </span>
+                  <span className="text-[9px] text-text-muted ml-auto">
+                    {domains.filter((d) => d.enabled).length}/{domains.length} active
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
-                  {DOMAINS.map((d) => (
+                  {domains.map((d) => (
                     <DomainChip
-                      key={d.key}
+                      key={d.id}
                       domain={d}
-                      enabled={enabledDomains[d.key]}
-                      onToggle={() => handleToggleDomain(d.key)}
+                      onToggle={() => toggleEnabled(d.id, !d.enabled)}
                     />
                   ))}
                 </div>

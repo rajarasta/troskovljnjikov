@@ -144,8 +144,9 @@ def _build_style(cell: Cell) -> dict[str, Any] | None:
             style["it"] = 1
         if font.size is not None:
             style["fs"] = font.size
-        if font.name is not None:
-            style["ff"] = font.name
+        # Note: font.name intentionally stripped to avoid expensive
+        # font-fallback calculations in Univer/Firefox when the Excel
+        # font (e.g. Calibri) is not installed on the host OS.
         color = _extract_rgb(font.color)
         if color is not None:
             style["cl"] = {"rgb": color}
@@ -226,8 +227,10 @@ def xlsx_to_workbook_data(file_path: str) -> dict:
 
         max_row = ws.max_row or 0
         max_col = ws.max_column or 0
-        row_count = max(max_row + 50, 1000)
-        col_count = max(max_col + 10, 26)
+        # Keep the grid tight — Univer freezes when it has to lay out
+        # hundreds of empty rows.  A small buffer is enough for scrolling.
+        row_count = max_row + 20
+        col_count = max_col + 5
 
         cell_data: dict[int, dict[int, dict]] = {}
 
@@ -257,41 +260,9 @@ def xlsx_to_workbook_data(file_path: str) -> dict:
 
                 cell_data.setdefault(r, {})[c] = entry
 
-        # --- Auto-wrap description column ---
-        # Detect description column: scan first few rows for "Stavka" header,
-        # fall back to column B (index 1).
-        desc_col = 1  # default: column B
-        for scan_row in range(0, min(5, max_row)):
-            row_cells = cell_data.get(scan_row, {})
-            for ci, ce in row_cells.items():
-                val = ce.get("v")
-                if isinstance(val, str) and "stavka" in val.lower():
-                    desc_col = ci
-                    break
-
-        # Inject tb=3 (wrap text) on all cells in the description column.
-        for r_idx, row_cells in cell_data.items():
-            entry = row_cells.get(desc_col)
-            if entry is None:
-                continue
-            val = entry.get("v")
-            if not isinstance(val, str) or len(val) < 10:
-                continue
-            existing_sid = entry.get("s")
-            if existing_sid and existing_sid in styles:
-                existing_style = styles[existing_sid]
-                if existing_style.get("tb") == 3:
-                    continue  # already wrapped
-                new_style = {**existing_style, "tb": 3}
-            else:
-                new_style = {"tb": 3}
-            new_key = _style_cache_key(new_style)
-            if new_key not in style_cache:
-                sid = f"s{style_counter}"
-                style_counter += 1
-                style_cache[new_key] = sid
-                styles[sid] = new_style
-            entry["s"] = style_cache[new_key]
+        # Note: auto-wrap for the description column is handled by the
+        # frontend (applyWrapDeferred in ExcelView.tsx).  Injecting tb=3
+        # here caused expensive font-measurement work that froze Firefox.
 
         # --- Merged cells ---
         merge_data: list[dict[str, int]] = []
@@ -309,7 +280,8 @@ def xlsx_to_workbook_data(file_path: str) -> dict:
             col_letter = get_column_letter(col_idx)
             dim = ws.column_dimensions.get(col_letter)
             if dim is not None and dim.width is not None:
-                column_data[col_idx - 1] = {"w": round(dim.width * _CHAR_WIDTH_TO_PX)}
+                # Enforce minimum width of 8px — Univer crashes on width ≤ 0
+                column_data[col_idx - 1] = {"w": max(8, round(dim.width * _CHAR_WIDTH_TO_PX))}
 
         # --- Row heights ---
         row_data: dict[int, dict[str, Any]] = {}

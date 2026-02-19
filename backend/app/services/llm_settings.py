@@ -243,12 +243,81 @@ AGENT_DEFAULTS: dict[str, dict[str, Any]] = {
         "enabled": True,
         "temperature": 0.1,
         "knowledge_prompt": (
-            "You are a Croatian construction materials price search specialist."
+            "You are a Croatian construction materials pricing specialist. "
+            "You rank product candidates by how well they match a target BOQ item description."
         ),
         "instruction_prompt": (
-            "Search approved supplier websites for current prices matching the target item. "
-            "Use search_domain, fetch_and_extract, and rag_lookup tools. "
-            "Report confidence honestly and consider unit compatibility."
+            "Given a target item and a list of web/historical price candidates, "
+            "rank them by match quality (0-1). Consider: product name similarity, "
+            "unit compatibility, price plausibility, extraction confidence. "
+            "Respond ONLY with valid JSON."
+        ),
+    },
+    "xml_resolver": {
+        "label": "XML Material Resolver",
+        "category": "agents",
+        "enabled": True,
+        "model_override": "anthropic",
+        "temperature": 0.1,
+        "knowledge_prompt": (
+            "You are a construction project material analyst specializing in Croatian ERP "
+            "(Pantheon/gala) XML exports. You understand Croatian construction terminology "
+            "and common ERP data structures for bills of materials."
+        ),
+        "instruction_prompt": (
+            "Interpret material line items from a Pantheon/gala XML project export. "
+            "Use the provided XML tools to explore the structure and extract material requirements.\n\n"
+            "For each material, produce a MaterialRequirement with:\n"
+            "- Accurate description in Croatian construction terms\n"
+            "- Quantity and unit (normalize to: kom, m, m2, m3, kg, l, set, pau)\n"
+            "- Confidence score (lower if ambiguous)\n"
+            "- Notes explaining any assumptions\n\n"
+            "Combine duplicates, ignore administrative items, and use unique req_ids (REQ-001, etc.)."
+        ),
+    },
+    "article_context": {
+        "label": "Article Context",
+        "category": "agents",
+        "enabled": True,
+        "model_override": "anthropic",
+        "temperature": 0.1,
+        "knowledge_prompt": (
+            "You are a Croatian construction materials catalog specialist. "
+            "You understand product catalogs, article codes, units of measure, "
+            "and how to match material requirements to catalog entries."
+        ),
+        "instruction_prompt": (
+            "Match material requirements to article catalog candidates.\n\n"
+            "For each requirement:\n"
+            "1. Review pre-fetched catalog candidates\n"
+            "2. Use catalog_lookup for additional searches if needed\n"
+            "3. Rank candidates by relevance (0-1 scale)\n"
+            "4. Never invent article IDs\n"
+            "5. Note unit mismatches between requirement and catalog\n\n"
+            "Return a CatalogMatch for every requirement, even if no good match exists."
+        ),
+    },
+    "pricing_synthesizer": {
+        "label": "Pricing Synthesizer",
+        "category": "agents",
+        "enabled": True,
+        "model_override": "anthropic",
+        "temperature": 0.2,
+        "knowledge_prompt": (
+            "You are a Croatian construction pricing analyst who synthesizes prices "
+            "from multiple evidence sources: article catalogs, web quotes, and historical BOQ data."
+        ),
+        "instruction_prompt": (
+            "Produce exactly 3 price points (low, mid, high) from all available evidence.\n\n"
+            "- low: Conservative/budget floor (lowest credible evidence)\n"
+            "- mid: Most likely market price (weighted by recency and relevance)\n"
+            "- high: Premium/safe estimate (urgency, shipping, waste)\n\n"
+            "Rules:\n"
+            "- All prices NET (ex-VAT) per unit in EUR\n"
+            "- Ignore zero/null prices\n"
+            "- Cite specific evidence in rationale\n"
+            "- Use evidence_ids to trace data sources\n"
+            "- Be honest about confidence when evidence is sparse"
         ),
     },
     "vision": {
@@ -346,9 +415,28 @@ _load()
 # Global model registry
 # ---------------------------------------------------------------------------
 
-_provider = OpenAIProvider(base_url=app_settings.LLM_BASE_URL)
+_provider: OpenAIProvider | None = None
 _cached_model: OpenAIChatModel | AnthropicModel | None = None
 _cached_model_name: str | None = None
+_cached_provider_url: str | None = None
+
+
+def _get_or_create_provider() -> OpenAIProvider:
+    """Create an OpenAI provider based on the active endpoint URL."""
+    global _provider, _cached_provider_url
+
+    # Import here to avoid circular dependency at module load time
+    from app.services import llm_discovery
+
+    active_url = llm_discovery.get_active_url()
+
+    # Rebuild provider if URL changed
+    if _provider is None or _cached_provider_url != active_url:
+        _provider = OpenAIProvider(base_url=active_url)
+        _cached_provider_url = active_url
+        logger.info(f"Rebuilt OpenAI provider for {active_url}")
+
+    return _provider
 
 
 def get_model() -> OpenAIChatModel | AnthropicModel:
@@ -363,7 +451,8 @@ def get_model() -> OpenAIChatModel | AnthropicModel:
             if not app_settings.ANTHROPIC_API_KEY:
                 logger.warning("Anthropic selected but ANTHROPIC_API_KEY not set, falling back to local model")
                 current = app_settings.LLM_MODEL_NAME
-                _cached_model = OpenAIChatModel(model_name=current, provider=_provider)
+                provider = _get_or_create_provider()
+                _cached_model = OpenAIChatModel(model_name=current, provider=provider)
             else:
                 # Set the environment variable for AnthropicModel
                 import os
@@ -371,7 +460,8 @@ def get_model() -> OpenAIChatModel | AnthropicModel:
                 _cached_model = AnthropicModel(model_name=app_settings.CLAUDE_MODEL)
                 logger.info("Global LLM model set to Anthropic (%s)", app_settings.CLAUDE_MODEL)
         else:
-            _cached_model = OpenAIChatModel(model_name=current, provider=_provider)
+            provider = _get_or_create_provider()
+            _cached_model = OpenAIChatModel(model_name=current, provider=provider)
             logger.info("Global LLM model set to local '%s'", current)
         _cached_model_name = current
     return _cached_model
@@ -380,6 +470,35 @@ def get_model() -> OpenAIChatModel | AnthropicModel:
 def get_current_model_name() -> str:
     """Return the currently selected model name."""
     return _global_settings.get("model_name", app_settings.LLM_MODEL_NAME)
+
+
+def get_model_for_agent(agent_id: str) -> OpenAIChatModel | AnthropicModel:
+    """Return the model for a specific agent, respecting model_override.
+
+    If the agent has a model_override in AGENT_DEFAULTS (or runtime overrides),
+    use that instead of the global model.
+    """
+    settings = get_settings(agent_id)
+    override = settings.get("model_override")
+
+    if not override:
+        return get_model()
+
+    # "anthropic" override → use Anthropic model
+    if override == "anthropic":
+        if not app_settings.ANTHROPIC_API_KEY:
+            logger.warning(
+                "Agent '%s' wants anthropic but no API key set, falling back to global",
+                agent_id,
+            )
+            return get_model()
+        import os
+        os.environ["ANTHROPIC_API_KEY"] = app_settings.ANTHROPIC_API_KEY
+        return AnthropicModel(model_name=app_settings.CLAUDE_MODEL)
+
+    # Any other override string → treat as local model name
+    provider = _get_or_create_provider()
+    return OpenAIChatModel(model_name=override, provider=provider)
 
 
 def set_model_name(name: str) -> str:
@@ -493,38 +612,34 @@ async def run_with_settings(
     default_composed = _compose_system_prompt(defaults)
     prompt_changed = composed_prompt and composed_prompt != default_composed
 
-    # Check if global model differs from the agent's built-in model
-    current_model = get_model()
-    model_changed = current_model is not agent.model
+    # Resolve the model for this agent (respects per-agent override)
+    current_model = get_model_for_agent(agent_id)
+
+    # Override model directly on the agent — avoids broken cloning
+    # that loses deps_type, tools context, and instructions
+    original_model = agent.model
+    agent.model = current_model
+
+    # Override system prompt if changed
+    original_prompts = None
+    if prompt_changed and hasattr(agent, '_system_prompts'):
+        original_prompts = agent._system_prompts
+        agent._system_prompts = (composed_prompt,)
 
     await emit(AGENT_RUN_START, {"agent_id": agent_id})
     t0 = time.monotonic()
     success = True
     try:
-        if prompt_changed or model_changed:
-            # When model or prompt changes, create a new agent with updated settings
-            # IMPORTANT: Copy all tools from the original agent!
-            tmp_agent = Agent(
-                model=current_model,
-                system_prompt=composed_prompt if prompt_changed else agent._system_prompts[0] if hasattr(agent, '_system_prompts') and agent._system_prompts else "",
-                output_type=agent._output_type if hasattr(agent, '_output_type') else str,
-                retries=agent._max_result_retries if hasattr(agent, '_max_result_retries') else 1,
-            )
-
-            # Copy tools from original agent to temporary agent
-            if hasattr(agent, '_tools') and agent._tools:
-                tmp_agent._tools = agent._tools
-            if hasattr(agent, '_tool_parser') and agent._tool_parser:
-                tmp_agent._tool_parser = agent._tool_parser
-
-            logger.info(f"Created temporary agent for {agent_id} with model {current_model}")
-            return await tmp_agent.run(prompt, model_settings=model_settings, **kwargs)
-
+        logger.info("Running agent %s with model %s", agent_id, current_model)
         return await agent.run(prompt, model_settings=model_settings, **kwargs)
     except Exception:
         success = False
         raise
     finally:
+        # Restore original model and prompts
+        agent.model = original_model
+        if original_prompts is not None:
+            agent._system_prompts = original_prompts
         duration_ms = int((time.monotonic() - t0) * 1000)
         await emit(AGENT_RUN_END, {
             "agent_id": agent_id,
@@ -564,17 +679,13 @@ async def run_stream_with_settings(
     default_composed = _compose_system_prompt(defaults)
     prompt_changed = composed_prompt and composed_prompt != default_composed
 
-    current_model = get_model()
-    model_changed = current_model is not agent.model
+    current_model = get_model_for_agent(agent_id)
+
+    # Override model directly on the agent
+    agent.model = current_model
+    if prompt_changed and hasattr(agent, '_system_prompts'):
+        agent._system_prompts = (composed_prompt,)
 
     await emit(AGENT_RUN_START, {"agent_id": agent_id})
-
-    if prompt_changed or model_changed:
-        tmp_agent = Agent(
-            model=current_model,
-            system_prompt=composed_prompt if prompt_changed else agent._system_prompts[0] if hasattr(agent, '_system_prompts') and agent._system_prompts else "",
-            retries=agent._max_result_retries if hasattr(agent, '_max_result_retries') else 1,
-        )
-        return tmp_agent.run_stream(prompt, model_settings=model_settings, **kwargs)
 
     return agent.run_stream(prompt, model_settings=model_settings, **kwargs)

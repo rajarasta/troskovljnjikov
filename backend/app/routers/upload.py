@@ -38,7 +38,7 @@ def _validate_file_type(filename: str | None, file_bytes: bytes) -> None:
         raise HTTPException(status_code=400, detail="File name is required")
 
     # Check extension
-    valid_extensions = {".xlsx", ".xls", ".csv"}
+    valid_extensions = {".xlsx", ".xls", ".csv", ".xml"}
     file_ext = Path(filename).suffix.lower()
     if file_ext not in valid_extensions:
         raise HTTPException(
@@ -52,6 +52,15 @@ def _validate_file_type(filename: str | None, file_bytes: bytes) -> None:
             raise HTTPException(
                 status_code=400,
                 detail="Invalid XLSX file. File signature does not match.",
+            )
+
+    # Check magic bytes for XML
+    if file_ext == ".xml":
+        stripped = file_bytes.lstrip()
+        if not stripped.startswith((b"<?xml", b"<")):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid XML file. File does not appear to be valid XML.",
             )
 
 
@@ -88,17 +97,6 @@ async def upload_file(
 
         if not result["success"]:
             raise HTTPException(status_code=422, detail=result.get("error", "Failed to parse file"))
-    except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
-    except Exception as e:
-        # Clean up file on indexing error
-        if stored_path.exists():
-            try:
-                stored_path.unlink()
-            except Exception as cleanup_error:
-                print(f"Failed to clean up file {stored_path}: {cleanup_error}")
-        raise HTTPException(status_code=500, detail="Failed to process file") from e
 
         # Persist file record
         db_file = BoQFile(
@@ -185,10 +183,9 @@ async def upload_file(
             item_count=result["file"]["itemCount"],
         )
     except HTTPException:
-        # Re-raise HTTP exceptions
         raise
     except Exception as e:
-        # Clean up file on database error
+        # Clean up file on error
         if stored_path.exists():
             try:
                 stored_path.unlink()

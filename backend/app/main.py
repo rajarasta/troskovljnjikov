@@ -9,8 +9,8 @@ from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import settings
-from app.database import create_tables, seed_default_presets
-from app.routers import upload, files, items, agents, chat, export, pipeline, presets, completion, autopilot, llm_settings, price_search
+from app.database import create_tables, seed_default_presets, seed_default_domains
+from app.routers import upload, files, items, agents, chat, export, pipeline, presets, completion, autopilot, llm_settings, price_search, articles, pricing, domains
 from app.ws.manager import manager
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,7 @@ class CatchAllMiddleware:
 async def lifespan(app: FastAPI):
     create_tables()
     seed_default_presets()
+    seed_default_domains()
     yield
 
 
@@ -105,6 +106,9 @@ app.include_router(completion.router, prefix="/api", tags=["completion"])
 app.include_router(autopilot.router, prefix="/api", tags=["autopilot"])
 app.include_router(llm_settings.router, prefix="/api", tags=["llm-settings"])
 app.include_router(price_search.router, prefix="/api", tags=["price-search"])
+app.include_router(articles.router, prefix="/api", tags=["articles"])
+app.include_router(pricing.router, prefix="/api", tags=["pricing"])
+app.include_router(domains.router, prefix="/api", tags=["domains"])
 
 # Static file serving for uploaded drawings (must come AFTER router registrations)
 os.makedirs("uploads", exist_ok=True)

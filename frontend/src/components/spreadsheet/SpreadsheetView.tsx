@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useCallback, forwardRef } from "react";
+import { useMemo, useCallback, forwardRef, useState, useEffect } from "react";
 import { FileSpreadsheet } from "lucide-react";
 import { useBoQStore } from "@/stores/boqStore";
 import { useSelectionStore } from "@/stores/selectionStore";
@@ -88,7 +88,16 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
   const parentSet = useMemo(() => buildParentSet(items), [items]);
 
   // Use workingItems for display (editable copy), fall back to items
-  const displayItems = workingItems.length > 0 ? workingItems : items;
+  const allDisplayItems = workingItems.length > 0 ? workingItems : items;
+
+  // Progressive rendering: render in chunks to avoid blocking the
+  // main thread with 1000+ DOM nodes at once.
+  const PAGE_SIZE = 200;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  // Reset page when file changes
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [selectedFileId]);
+  const displayItems = allDisplayItems.slice(0, visibleCount);
+  const hasMore = visibleCount < allDisplayItems.length;
 
   // Build a lookup map: row index -> { color, isActive } for highlighting.
   const selectionHighlightMap = useMemo(() => {
@@ -337,6 +346,21 @@ const SpreadsheetView = forwardRef<HTMLDivElement>(function SpreadsheetView(_pro
               </tr>
             );
           })}
+          {hasMore && (
+            <tr>
+              <td
+                colSpan={BOQ_COLUMNS.length}
+                className="text-center py-3"
+              >
+                <button
+                  onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+                  className="text-xs text-accent-purple hover:underline"
+                >
+                  Show more ({allDisplayItems.length - visibleCount} remaining)
+                </button>
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>

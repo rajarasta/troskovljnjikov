@@ -8,6 +8,28 @@ import { fetchFileItems } from "@/lib/api";
 import type { BoQItem } from "@/lib/types";
 import { formatNumber } from "@/lib/boqTableConfig";
 
+function CopyCell({ children, className }: { children: React.ReactNode; className: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleClick = () => {
+    const text = typeof children === "string" ? children : String(children ?? "");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 800);
+    });
+  };
+
+  return (
+    <td
+      className={`${className} cursor-pointer transition-colors ${copied ? "!bg-accent-emerald/20" : "hover:bg-accent-cyan/10"}`}
+      onClick={handleClick}
+      title="Click to copy"
+    >
+      {children}
+    </td>
+  );
+}
+
 export default function FilePreviewModal() {
   const { previewFileId, previewFileName, closePreview } = useFilePreviewStore();
   const [items, setItems] = useState<BoQItem[]>([]);
@@ -120,28 +142,28 @@ export default function FilePreviewModal() {
                   <tbody>
                     {items.map((item) => (
                       <tr key={item.id} className="hover:bg-bg-hover transition-colors">
-                        <td className="border border-border-default px-1 py-1 font-mono text-[9px] text-text-muted whitespace-nowrap">
+                        <CopyCell className="border border-border-default px-1 py-1 font-mono text-[9px] text-text-muted whitespace-nowrap">
                           {item.item_number ?? "—"}
-                        </td>
-                        <td
+                        </CopyCell>
+                        <CopyCell
                           className={`border border-border-default px-1 py-1 text-[9px] text-text-primary ${
                             wrapText ? "whitespace-pre-wrap break-words max-w-sm" : "max-w-xs truncate"
                           }`}
                         >
                           {item.description}
-                        </td>
-                        <td className="border border-border-default px-1 py-1 text-center text-[9px] text-text-muted whitespace-nowrap">
+                        </CopyCell>
+                        <CopyCell className="border border-border-default px-1 py-1 text-center text-[9px] text-text-muted whitespace-nowrap">
                           {item.unit ?? "—"}
-                        </td>
-                        <td className="border border-border-default px-1 py-1 text-right font-mono text-[9px] text-text-primary whitespace-nowrap">
+                        </CopyCell>
+                        <CopyCell className="border border-border-default px-1 py-1 text-right font-mono text-[9px] text-text-primary whitespace-nowrap">
                           {formatNumber(item.quantity)}
-                        </td>
-                        <td className="border border-border-default px-1 py-1 text-right font-mono text-[9px] text-text-primary whitespace-nowrap">
+                        </CopyCell>
+                        <CopyCell className="border border-border-default px-1 py-1 text-right font-mono text-[9px] text-text-primary whitespace-nowrap">
                           {formatNumber(item.unit_price)}
-                        </td>
-                        <td className="border border-border-default px-1 py-1 text-right font-mono text-[9px] text-text-primary whitespace-nowrap">
+                        </CopyCell>
+                        <CopyCell className="border border-border-default px-1 py-1 text-right font-mono text-[9px] text-text-primary whitespace-nowrap">
                           {formatNumber(item.total)}
-                        </td>
+                        </CopyCell>
                       </tr>
                     ))}
                   </tbody>

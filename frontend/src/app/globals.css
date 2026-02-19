@@ -31,19 +31,18 @@
   --color-border-default: #d1d5db;
   --color-border-active: #b4231833;
 
-  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  --font-mono: var(--font-jetbrains), "JetBrains Mono", "Fira Code", monospace;
 }
 
 body {
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
 }
 
 /* Panel with subtle depth */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.92);
   border: 1px solid var(--color-border-default);
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
@@ -140,16 +139,6 @@ body {
 .prose-chat .table-wrap {
   overflow-x: auto;
   margin: 0.4em 0;
-}
-
-/* Univer zoom slider: compact — hide track and %, keep only +/- buttons */
-.univer-select-none.univer-items-center.univer-gap-1 {
-  gap: 0 !important;
-}
-/* Hide slider track (2nd child) and percentage dropdown (4th child) */
-.univer-select-none.univer-items-center.univer-gap-1 > :nth-child(2),
-.univer-select-none.univer-items-center.univer-gap-1 > :nth-child(4) {
-  display: none !important;
 }
 
 /* Scrollbar styling */

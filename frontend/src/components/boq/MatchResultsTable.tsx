@@ -1,6 +1,8 @@
 "use client";
 
 import { formatNumber } from "@/lib/boqTableConfig";
+import { useBoQStore } from "@/stores/boqStore";
+import { useSelectionStore } from "@/stores/selectionStore";
 import { useFilePreviewStore } from "@/stores/filePreviewStore";
 import type { MatchResult, MatchGroup } from "@/lib/types";
 
@@ -36,10 +38,10 @@ function pctDiffLabel(ref: number | null | undefined, val: number): string | nul
 }
 
 function pctDiffColor(ref: number, val: number): string {
-  const pct = Math.abs(((val - ref) / ref) * 100);
-  if (pct <= 10) return "text-green-400";
-  if (pct <= 50) return "text-amber-400";
-  return "text-red-400";
+  const pctDiff = ((val - ref) / ref) * 100;
+  if (pctDiff > 100) return "text-red-400";
+  if (pctDiff > 0) return "text-amber-400";
+  return "text-green-400";
 }
 
 function MatchRow({ match, wrapText, refQty, refPrice, refTotal }: { match: MatchResult; wrapText: boolean; refQty?: number | null; refPrice?: number | null; refTotal?: number | null }) {
@@ -52,7 +54,7 @@ function MatchRow({ match, wrapText, refQty, refPrice, refTotal }: { match: Matc
   return (
     <tr className="hover:bg-bg-hover transition-colors duration-100">
       {/* R.br. */}
-      <td className="border border-border-default px-1 py-1 font-mono text-[10px] text-text-muted whitespace-nowrap align-top">
+      <td className="border border-border-default px-1 py-1 text-text-muted whitespace-nowrap align-top">
         {item.item_number ?? "\u2014"}
       </td>
 
@@ -79,7 +81,7 @@ function MatchRow({ match, wrapText, refQty, refPrice, refTotal }: { match: Matc
                 e.stopPropagation();
                 const fileName = item.file_name;
                 if (fileName) {
-                  console.log("👁️ Preview file:", item.file_id, fileName);
+                  console.log("\ud83d\udc41\ufe0f Preview file:", item.file_id, fileName);
                   useFilePreviewStore.getState().setPreviewFile(item.file_id, fileName);
                 }
               }}
@@ -100,30 +102,44 @@ function MatchRow({ match, wrapText, refQty, refPrice, refTotal }: { match: Matc
       </td>
 
       {/* JM */}
-      <td className="border border-border-default px-1 py-1 text-[10px] text-text-muted whitespace-nowrap align-top">
+      <td className="border border-border-default px-1 py-1 text-text-muted whitespace-nowrap align-top">
         {item.unit ?? "\u2014"}
       </td>
 
       {/* Kol. */}
-      <td className="border border-border-default px-1 py-1 text-right font-mono text-[10px] text-text-primary whitespace-nowrap align-bottom">
+      <td className="border border-border-default px-1 py-1 text-right font-mono text-text-primary whitespace-nowrap align-bottom">
         {qtyDiff && (
-          <div className={`text-[8px] ${pctDiffColor(refQty!, item.quantity ?? 0)}`}>{qtyDiff}</div>
+          <div className={`text-[9px] font-semibold ${pctDiffColor(refQty!, item.quantity ?? 0)}`}>{qtyDiff}</div>
         )}
         {formatNumber(item.quantity ?? 0)}
       </td>
 
-      {/* JC */}
-      <td className="border border-border-default px-1 py-1 text-right font-mono text-[10px] text-text-primary whitespace-nowrap align-bottom">
+      {/* JC - clickable to apply price */}
+      <td
+        className="border border-border-default px-1 py-1 text-right font-mono text-text-primary whitespace-nowrap align-bottom cursor-pointer hover:bg-accent-cyan/10 transition-colors"
+        title="Click to apply this price to BOQ"
+        onClick={(e) => {
+          e.stopPropagation();
+          const activeSelId = useSelectionStore.getState().activeSelectionId;
+          const activeSel = useSelectionStore.getState().selections.find((s) => s.id === activeSelId);
+          const targetItem = activeSel?.items[0];
+          if (targetItem && item.unit_price != null) {
+            useBoQStore.getState().updateWorkingItem(targetItem.id, {
+              unit_price: item.unit_price,
+            });
+          }
+        }}
+      >
         {priceDiff && (
-          <div className={`text-[8px] ${pctDiffColor(refPrice!, item.unit_price ?? 0)}`}>{priceDiff}</div>
+          <div className={`text-[9px] font-semibold ${pctDiffColor(refPrice!, item.unit_price ?? 0)}`}>{priceDiff}</div>
         )}
         {formatNumber(item.unit_price ?? 0)}
       </td>
 
       {/* UC */}
-      <td className="border border-border-default px-1 py-1 text-right font-mono text-[10px] text-text-primary whitespace-nowrap align-bottom">
+      <td className="border border-border-default px-1 py-1 text-right font-mono text-text-primary whitespace-nowrap align-bottom">
         {totalDiff && (
-          <div className={`text-[8px] ${pctDiffColor(refTotal!, item.total ?? 0)}`}>{totalDiff}</div>
+          <div className={`text-[9px] font-semibold ${pctDiffColor(refTotal!, item.total ?? 0)}`}>{totalDiff}</div>
         )}
         {formatNumber(item.total ?? 0)}
       </td>
@@ -144,7 +160,7 @@ export default function MatchResultsTable({
 }: Props) {
   return (
     <div>
-      <table className="w-full text-xs border-collapse">
+      <table className="w-full text-[11px] border-collapse">
         <colgroup>
           {COLUMNS.map((col) => (
             <col
@@ -180,7 +196,7 @@ export default function MatchResultsTable({
                 <tr>
                   <td
                     colSpan={COL_COUNT}
-                    className="border border-accent-purple/30 bg-accent-purple/10 px-2 py-1.5 text-[11px] font-semibold text-text-primary"
+                    className="border border-accent-purple/30 bg-accent-purple/10 px-2 py-1.5 font-semibold text-text-primary"
                   >
                     {parentDescription}
                   </td>
@@ -239,16 +255,16 @@ function GroupRows({ group, wrapText, refQty, refPrice, refTotal }: { group: Mat
     <>
       {/* Sub-item header row */}
       <tr>
-        <td className="border border-accent-purple/20 bg-accent-purple/5 px-1 py-1 font-mono text-[10px] font-semibold text-accent-purple whitespace-nowrap">
+        <td className="border border-accent-purple/20 bg-accent-purple/5 px-1 py-1 font-semibold text-accent-purple whitespace-nowrap">
           {sub.item_number ?? ""}
         </td>
-        <td className="border border-accent-purple/20 bg-accent-purple/5 px-1.5 py-1 text-[11px] font-medium text-text-primary">
+        <td className="border border-accent-purple/20 bg-accent-purple/5 px-1.5 py-1 font-medium text-text-primary">
           {sub.description}
         </td>
-        <td className="border border-accent-purple/20 bg-accent-purple/5 px-1 py-1 text-[10px] text-text-muted">
+        <td className="border border-accent-purple/20 bg-accent-purple/5 px-1 py-1 text-text-muted">
           {sub.unit ?? ""}
         </td>
-        <td className="border border-accent-purple/20 bg-accent-purple/5 px-1 py-1 text-right font-mono text-[10px] text-text-muted">
+        <td className="border border-accent-purple/20 bg-accent-purple/5 px-1 py-1 text-right font-mono text-text-muted">
           {formatNumber(sub.quantity ?? 0)}
         </td>
         <td
@@ -269,7 +285,7 @@ function GroupRows({ group, wrapText, refQty, refPrice, refTotal }: { group: Mat
         <tr>
           <td
             colSpan={COL_COUNT}
-            className="border border-border-default px-2 py-2 text-center text-[10px] text-text-muted italic"
+            className="border border-border-default px-2 py-2 text-center text-text-muted italic"
           >
             No matches found
           </td>

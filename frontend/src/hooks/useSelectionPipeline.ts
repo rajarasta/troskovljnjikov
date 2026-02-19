@@ -40,6 +40,15 @@ export function useSelectionPipeline() {
   const pendingSelections = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    // Detect removed IDs first (before adding new ones)
+    const currentIds = new Set(selections.map((s) => s.id));
+    const removedIds = new Set<string>();
+    for (const id of processedIds.current) {
+      if (!currentIds.has(id)) {
+        removedIds.add(id);
+      }
+    }
+
     // Collect new selections into pending set
     const newSelectionIds = new Set<string>();
     for (const selection of selections) {
@@ -49,9 +58,30 @@ export function useSelectionPipeline() {
       }
     }
 
-    // If no new selections, process removals immediately
+    // Replacement: old removed + new added in same cycle
+    // Clean up old requests immediately (no debounce needed for cleanup)
+    if (removedIds.size > 0 && newSelectionIds.size > 0) {
+      for (const id of removedIds) {
+        // Abort in-flight API request
+        const controller = abortControllers.current.get(id);
+        if (controller) {
+          controller.abort();
+          abortControllers.current.delete(id);
+        }
+        // Remove associated chat panel
+        const panel = useChatPanelStore.getState().getPanelBySelection(id);
+        if (panel) {
+          useChatPanelStore.getState().removePanel(panel.id);
+        }
+        // Remove associated match results
+        useMatchStore.getState().clearSelection(id);
+        processedIds.current.delete(id);
+      }
+    }
+
+    // If no new selections, process removals (non-replacement case)
     if (newSelectionIds.size === 0) {
-      processRemovals();
+      if (removedIds.size > 0) processRemovals();
       return;
     }
 

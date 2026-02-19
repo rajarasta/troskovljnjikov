@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -10,6 +11,13 @@ from app.database import get_db
 from app.models.boq import BoQFile, BoQItem
 from app.schemas.boq import BoQItemSchema, FileInfo
 from app.services.workbook_converter import xlsx_to_workbook_data
+
+
+# Cache converted workbook data — avoids re-parsing xlsx on every click.
+# Key: (file_id, stored_path).  Max 8 files in cache.
+@lru_cache(maxsize=8)
+def _cached_workbook_data(file_id: str, stored_path: str) -> dict:
+    return xlsx_to_workbook_data(stored_path)
 
 router = APIRouter()
 
@@ -68,4 +76,4 @@ def get_workbook_data(file_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="File not found")
     if not f.stored_path or not Path(f.stored_path).is_file():
         raise HTTPException(status_code=404, detail="Original xlsx file not available")
-    return xlsx_to_workbook_data(f.stored_path)
+    return _cached_workbook_data(f.id, f.stored_path)

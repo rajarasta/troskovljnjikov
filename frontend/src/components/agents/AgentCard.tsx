@@ -41,6 +41,19 @@ const AGENT_CONFIG: Record<
   },
 };
 
+/** Derive a readable label from the event type when agent_type is missing */
+function deriveLabel(event: AgentEvent): string {
+  const type = event.type;
+  if (type.startsWith("agent:")) {
+    const action = type.replace("agent:", "");
+    const agentId = event.payload?.agent_id as string | undefined;
+    return agentId ? `${action} (${agentId})` : action;
+  }
+  if (type.startsWith("pipeline:")) return `Pipeline ${type.replace("pipeline:", "")}`;
+  if (type.startsWith("pricing:")) return `Pricing ${type.replace("pricing:", "")}`;
+  return type;
+}
+
 const ACTIVE_TYPES = new Set(["agent_spawn", "agent_progress"]);
 const COMPLETE_TYPES = new Set(["agent_complete"]);
 const ERROR_TYPES = new Set(["agent_error"]);
@@ -105,7 +118,7 @@ export default function AgentCard({ event }: AgentCardProps) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <span className={`text-xs font-medium ${config.color} capitalize`}>
-            {agentType}
+            {agentType !== "unknown" ? agentType : deriveLabel(event)}
           </span>
           {event.agent_id && (
             <span className="text-[10px] text-text-muted font-mono truncate">

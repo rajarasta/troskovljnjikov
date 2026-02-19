@@ -48,6 +48,13 @@ SEARCH_PROGRESS = "search:progress"
 SEARCH_QUOTE_FOUND = "search:quote_found"
 SEARCH_COMPLETE = "search:complete"
 
+# Pricing pipeline events
+PRICING_STAGE_CHANGED = "pricing:stage_changed"
+PRICING_ITEM_PROGRESS = "pricing:item_progress"
+PRICING_ITEM_RESULT = "pricing:item_result"
+PRICING_COMPLETE = "pricing:complete"
+PRICING_ERROR = "pricing:error"
+
 
 async def emit(
     event_type: str,

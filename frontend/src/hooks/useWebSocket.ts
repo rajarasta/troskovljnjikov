@@ -19,6 +19,11 @@ const handlers: Record<string, (event: AgentEvent) => void> = {
   ...searchHandlers,
 };
 
+// Only track actual agent lifecycle events in the Agent Activity panel.
+// Other WS events (match results, price suggestions, summary tokens, etc.)
+// are handled by their specific handlers but don't need to clutter the panel.
+const AGENT_EVENT_PREFIXES = ["agent:", "pipeline:", "pricing:"];
+
 export function useWebSocket() {
   const [isConnected, setIsConnected] = useState(false);
   const addEvent = useAgentStore((s) => s.addEvent);
@@ -31,7 +36,10 @@ export function useWebSocket() {
     }, 1000);
 
     const handleMessage = (event: AgentEvent) => {
-      addEvent(event);
+      // Only add to Agent Activity panel if it's an actual agent/pipeline event
+      if (AGENT_EVENT_PREFIXES.some((p) => event.type.startsWith(p))) {
+        addEvent(event);
+      }
       handlers[event.type]?.(event);
     };
 
